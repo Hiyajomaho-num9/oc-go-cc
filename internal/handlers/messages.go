@@ -231,6 +231,31 @@ func (h *MessagesHandler) handleStreaming(
 		f.Flush()
 	}
 
+	// Start heartbeat to keep connection alive while waiting for upstream.
+	// Claude Code times out after ~6 seconds of no data, so we send pings every 2 seconds.
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Send SSE comment (ignored by client but keeps connection alive)
+				fmt.Fprintf(w, ":heartbeat\n\n")
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			case <-heartbeatDone:
+				return
+			case <-clientCtx.Done():
+				return
+			}
+		}
+	}()
+	// Stop heartbeat when streaming completes
+	defer close(heartbeatDone)
+
 	for _, model := range modelChain {
 		// If the client already disconnected, stop trying fallbacks.
 		if isClientDisconnected(r) {
