@@ -8,9 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"oc-go-cc/internal/client"
 	"oc-go-cc/internal/config"
+	"oc-go-cc/internal/metrics"
+	"oc-go-cc/internal/middleware"
 	"oc-go-cc/internal/router"
 	"oc-go-cc/internal/token"
 	"oc-go-cc/internal/transformer"
@@ -28,6 +31,10 @@ type MessagesHandler struct {
 	streamHandler       *transformer.StreamHandler
 	tokenCounter        *token.Counter
 	logger              *slog.Logger
+	rateLimiter         *middleware.RateLimiter
+	requestDedup        *middleware.RequestDeduplicator
+	requestIDGen        *middleware.RequestIDGenerator
+	metrics             *metrics.Metrics
 }
 
 // responseWriter wraps http.ResponseWriter to track if headers were written.
@@ -64,6 +71,7 @@ func NewMessagesHandler(
 	modelRouter *router.ModelRouter,
 	fallbackHandler *router.FallbackHandler,
 	tokenCounter *token.Counter,
+	metrics *metrics.Metrics,
 ) *MessagesHandler {
 	return &MessagesHandler{
 		config:              cfg,
@@ -75,6 +83,10 @@ func NewMessagesHandler(
 		streamHandler:       transformer.NewStreamHandler(),
 		tokenCounter:        tokenCounter,
 		logger:              slog.Default(),
+		rateLimiter:         middleware.NewRateLimiter(100, time.Minute),
+		requestDedup:        middleware.NewRequestDeduplicator(500 * time.Millisecond),
+		requestIDGen:        middleware.NewRequestIDGenerator(),
+		metrics:             metrics,
 	}
 }
 
@@ -85,6 +97,22 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Generate or get request ID for correlation
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = h.requestIDGen.Generate()
+	}
+	w.Header().Set("X-Request-ID", requestID)
+
+	// Rate limiting
+	clientIP := middleware.GetClientIP(r)
+	if !h.rateLimiter.Allow(clientIP) {
+		h.metrics.RecordRateLimited()
+		h.logger.Warn("rate limited", "client", clientIP, "request_id", requestID)
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
+
 	// Read the raw request body for debug logging
 	var rawBody json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
@@ -92,8 +120,12 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Log the raw request for debugging
-	h.logger.Debug("raw request body", "body", string(rawBody))
+	// Deduplicate - skip duplicate requests
+	if _, ok := h.requestDedup.TryAcquire(rawBody); !ok {
+		h.metrics.RecordDeduplicated()
+		h.logger.Info("duplicate request skipped", "request_id", requestID)
+		return
+	}
 
 	// Parse into Anthropic request
 	var anthropicReq types.MessageRequest
@@ -108,7 +140,9 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Record metrics
 	isStreaming := anthropicReq.Stream != nil && *anthropicReq.Stream
+	h.metrics.RecordRequest(isStreaming)
 
 	h.logger.Info("received request",
 		"model", anthropicReq.Model,
@@ -177,7 +211,12 @@ func (h *MessagesHandler) handleStreaming(
 	modelChain []config.ModelConfig,
 	rawBody json.RawMessage,
 ) {
-	ctx := r.Context()
+	// Use background context with timeout - detached from HTTP request context but with timeout
+	// The HTTP context gets canceled when the client disconnects or when
+	// concurrent requests interfere, but streaming needs to continue independently.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	rw := &responseWriter{ResponseWriter: w}
 
 	for _, model := range modelChain {

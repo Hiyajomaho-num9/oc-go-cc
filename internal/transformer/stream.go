@@ -3,6 +3,7 @@ package transformer
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,145 +63,156 @@ func (h *StreamHandler) ProxyStream(
 	}
 	flusher.Flush()
 
-	// Read and transform streaming chunks from OpenAI.
-	scanner := bufio.NewScanner(openaiResp)
+	// Use bufio.Reader for real-time reading (Scanner buffers entire lines).
+	reader := bufio.NewReader(openaiResp)
 	contentIndex := 0
+	var lineBuf bytes.Buffer
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// SSE data lines are prefixed with "data: ".
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to read stream: %w", err)
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
+		if b == '\n' {
+			line := lineBuf.String()
+			lineBuf.Reset()
 
-		// Skip empty data lines.
-		if data == "" {
-			continue
-		}
-
-		var chunk types.ChatCompletionChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			// Log and skip malformed chunks — don't break the stream.
-			continue
-		}
-
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-
-		choice := chunk.Choices[0]
-
-		// Handle text content deltas.
-		if choice.Delta.Content != "" {
-			// Send content_block_start for the first text delta.
-			if contentIndex == 0 {
-				startEvent := types.MessageEvent{
-					Type:  "content_block_start",
-					Index: &contentIndex,
-					Delta: &types.Delta{
-						Type: "text",
-					},
-				}
-				if err := writeSSEEvent(w, startEvent); err != nil {
-					return fmt.Errorf("failed to write content_block_start: %w", err)
-				}
+			// Skip empty lines and non-data lines
+			if !strings.HasPrefix(line, "data: ") {
+				continue
 			}
 
-			delta := types.Delta{
-				Type: "text_delta",
-				Text: choice.Delta.Content,
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+			if data == "" {
+				continue
 			}
 
-			event := types.MessageEvent{
-				Type:  "content_block_delta",
-				Index: &contentIndex,
-				Delta: &delta,
+			var chunk types.ChatCompletionChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
 			}
 
-			if err := writeSSEEvent(w, event); err != nil {
-				return fmt.Errorf("failed to write content_block_delta: %w", err)
+			if len(chunk.Choices) == 0 {
+				continue
 			}
-			flusher.Flush()
-		}
 
-		// Handle tool call deltas.
-		if len(choice.Delta.ToolCalls) > 0 {
-			for _, tc := range choice.Delta.ToolCalls {
-				// Increment index for each tool call block.
-				contentIndex++
+			choice := chunk.Choices[0]
 
-				// Send content_block_start for tool use.
-				startEvent := types.MessageEvent{
-					Type:  "content_block_start",
-					Index: &contentIndex,
-					Delta: &types.Delta{
-						Type: "tool_use",
-					},
-				}
-				if err := writeSSEEvent(w, startEvent); err != nil {
-					return fmt.Errorf("failed to write tool content_block_start: %w", err)
-				}
-
-				// Send input_json_delta for tool arguments.
-				if tc.Function.Arguments != "" {
-					delta := types.Delta{
-						Type:        "input_json_delta",
-						PartialJSON: tc.Function.Arguments,
-					}
-
-					event := types.MessageEvent{
-						Type:  "content_block_delta",
+			// Handle text content deltas.
+			if choice.Delta.Content != "" {
+				// Send content_block_start for the first text delta.
+				if contentIndex == 0 {
+					startEvent := types.MessageEvent{
+						Type:  "content_block_start",
 						Index: &contentIndex,
-						Delta: &delta,
+						Delta: &types.Delta{
+							Type: "text",
+						},
 					}
+					if err := writeSSEEvent(w, startEvent); err != nil {
+						return fmt.Errorf("failed to write content_block_start: %w", err)
+					}
+				}
 
-					if err := writeSSEEvent(w, event); err != nil {
-						return fmt.Errorf("failed to write input_json_delta: %w", err)
-					}
+				delta := types.Delta{
+					Type: "text_delta",
+					Text: choice.Delta.Content,
+				}
+
+				event := types.MessageEvent{
+					Type:  "content_block_delta",
+					Index: &contentIndex,
+					Delta: &delta,
+				}
+
+				if err := writeSSEEvent(w, event); err != nil {
+					return fmt.Errorf("failed to write content_block_delta: %w", err)
 				}
 				flusher.Flush()
 			}
-		}
 
-		// Handle finish reason — stream is ending.
-		if choice.FinishReason != "" {
-			// Send content_block_stop for the last active block.
-			stopEvent := types.MessageEvent{
-				Type:  "content_block_stop",
-				Index: &contentIndex,
-			}
-			if err := writeSSEEvent(w, stopEvent); err != nil {
-				return fmt.Errorf("failed to write content_block_stop: %w", err)
-			}
+			// Handle tool call deltas.
+			if len(choice.Delta.ToolCalls) > 0 {
+				for _, tc := range choice.Delta.ToolCalls {
+					// Increment index for each tool call block.
+					contentIndex++
 
-			// Build usage delta from chunk usage if available.
-			var usage *types.Usage
-			if chunk.Usage != nil {
-				usage = &types.Usage{
-					InputTokens:  chunk.Usage.PromptTokens,
-					OutputTokens: chunk.Usage.CompletionTokens,
+					// Send content_block_start for tool use.
+					startEvent := types.MessageEvent{
+						Type:  "content_block_start",
+						Index: &contentIndex,
+						Delta: &types.Delta{
+							Type: "tool_use",
+						},
+					}
+					if err := writeSSEEvent(w, startEvent); err != nil {
+						return fmt.Errorf("failed to write tool content_block_start: %w", err)
+					}
+
+					// Send input_json_delta for tool arguments.
+					if tc.Function.Arguments != "" {
+						delta := types.Delta{
+							Type:        "input_json_delta",
+							PartialJSON: tc.Function.Arguments,
+						}
+
+						event := types.MessageEvent{
+							Type:  "content_block_delta",
+							Index: &contentIndex,
+							Delta: &delta,
+						}
+
+						if err := writeSSEEvent(w, event); err != nil {
+							return fmt.Errorf("failed to write input_json_delta: %w", err)
+						}
+					}
+					flusher.Flush()
 				}
 			}
 
-			// Send message_delta with stop reason and usage.
-			msgDelta := types.MessageEvent{
-				Type: "message_delta",
-				Delta: &types.Delta{
-					StopReason: h.responseTransformer.mapFinishReason(choice.FinishReason),
-				},
-				Usage: usage,
-			}
-			if err := writeSSEEvent(w, msgDelta); err != nil {
-				return fmt.Errorf("failed to write message_delta: %w", err)
-			}
+			// Handle finish reason — stream is ending.
+			if choice.FinishReason != "" {
+				// Send content_block_stop for the last active block.
+				stopEvent := types.MessageEvent{
+					Type:  "content_block_stop",
+					Index: &contentIndex,
+				}
+				if err := writeSSEEvent(w, stopEvent); err != nil {
+					return fmt.Errorf("failed to write content_block_stop: %w", err)
+				}
 
-			flusher.Flush()
+				// Build usage delta from chunk usage if available.
+				var usage *types.Usage
+				if chunk.Usage != nil {
+					usage = &types.Usage{
+						InputTokens:  chunk.Usage.PromptTokens,
+						OutputTokens: chunk.Usage.CompletionTokens,
+					}
+				}
+
+				// Send message_delta with stop reason and usage.
+				msgDelta := types.MessageEvent{
+					Type: "message_delta",
+					Delta: &types.Delta{
+						StopReason: h.responseTransformer.mapFinishReason(choice.FinishReason),
+					},
+					Usage: usage,
+				}
+				if err := writeSSEEvent(w, msgDelta); err != nil {
+					return fmt.Errorf("failed to write message_delta: %w", err)
+				}
+
+				flusher.Flush()
+			}
+		} else {
+			lineBuf.WriteByte(b)
 		}
 	}
 
@@ -213,7 +225,7 @@ func (h *StreamHandler) ProxyStream(
 	}
 	flusher.Flush()
 
-	return scanner.Err()
+	return nil
 }
 
 // writeSSEEvent writes a single SSE event to the HTTP response writer.

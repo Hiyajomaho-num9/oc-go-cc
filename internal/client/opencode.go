@@ -34,6 +34,15 @@ func NewOpenCodeClient(cfg config.OpenCodeGoConfig, apiKey string) *OpenCodeClie
 		timeout = 5 * time.Minute
 	}
 
+	// Configure connection pooling for better performance
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		MaxConnsPerHost:     50,
+		DisableKeepAlives:   false,
+	}
+
 	return &OpenCodeClient{
 		openAIConfig: EndpointConfig{
 			BaseURL: cfg.BaseURL,
@@ -44,7 +53,8 @@ func NewOpenCodeClient(cfg config.OpenCodeGoConfig, apiKey string) *OpenCodeClie
 			APIKey:  apiKey,
 		},
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }

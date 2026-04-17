@@ -262,3 +262,25 @@ func IsRetryableError(err error) bool {
 	}
 	return false
 }
+
+// GetCircuitStates returns the state of all circuit breakers.
+func (h *FallbackHandler) GetCircuitStates() map[string]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	states := make(map[string]string)
+	for modelID, cb := range h.circuitBreakers {
+		state := cb.State()
+		switch state {
+		case CircuitClosed:
+			states[modelID] = "closed"
+		case CircuitHalfOpen:
+			states[modelID] = "half_open"
+		case CircuitOpen:
+			states[modelID] = "open"
+		default:
+			states[modelID] = "unknown"
+		}
+	}
+	return states
+}

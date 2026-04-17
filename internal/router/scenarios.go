@@ -35,9 +35,9 @@ type MessageContent struct {
 // DetectScenario analyzes a request to determine which model to use.
 // Routing priority:
 //  1. Long Context (> threshold)
-//  2. Complex (architectural patterns)
+//  2. Complex (architectural patterns or tool-heavy operations)
 //  3. Think (reasoning patterns)
-//  4. Background (simple operations)
+//  4. Background (simple operations with NO tools)
 //  5. Default
 func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Config) ScenarioResult {
 	// 1. Check for long context first (most important)
@@ -50,12 +50,12 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 		}
 	}
 
-	// 2. Check for complex architectural tasks
+	// 2. Check for complex tasks (architectural OR tool-related)
 	if hasComplexPattern(messages) {
 		return ScenarioResult{
 			Scenario:   ScenarioComplex,
 			TokenCount: tokenCount,
-			Reason:     "complex architectural pattern detected (use GLM-5.1)",
+			Reason:     "complex or tool-based operation detected (use GLM-5.1)",
 		}
 	}
 
@@ -68,12 +68,12 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 		}
 	}
 
-	// 4. Check for background task patterns
+	// 4. Check for background task patterns (truly simple operations)
 	if hasBackgroundPattern(messages) {
 		return ScenarioResult{
 			Scenario:   ScenarioBackground,
 			TokenCount: tokenCount,
-			Reason:     "background task pattern detected (use Qwen3.5 Plus)",
+			Reason:     "simple background task detected (use Qwen3.5 Plus)",
 		}
 	}
 
@@ -85,13 +85,19 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 	}
 }
 
-// hasComplexPattern looks for complex architectural tasks that need GLM-5.1.
+// hasComplexPattern looks for complex operations that need more capable models.
+// This includes tool-based operations (executing functions, writing/editing files, etc.)
 func hasComplexPattern(messages []MessageContent) bool {
 	complexKeywords := []string{
+		// Architectural
 		"architect", "architecture", "refactor", "redesign",
 		"complex", "difficult", "challenging",
 		"optimize", "performance", "efficiency",
 		"design pattern", "best practice",
+		// Tool-related keywords indicate complex operations
+		"execute", "run command", "bash", "shell",
+		"implement", "build", "create", "add feature",
+		"write to", "edit file", "create file",
 	}
 
 	for _, msg := range messages {
@@ -132,19 +138,32 @@ func hasThinkingPattern(messages []MessageContent) bool {
 	return false
 }
 
-// hasBackgroundPattern looks for patterns that suggest background tasks
-// such as file reading, directory listing, grep operations, or simple commands.
+// hasBackgroundPattern checks for VERY simple background tasks.
+// IMPORTANT: This should be conservative - returns true only for truly trivial requests.
+// If there's any mention of tools, functions, or writing, it's NOT background.
 func hasBackgroundPattern(messages []MessageContent) bool {
+	// If ANY tool keywords appear, it's NOT a background task
+	toolBlockers := []string{
+		"tool", "function", "execute", "run command",
+		"write", "edit", "create", "delete", "remove",
+		"implement", "build", "add", "modify",
+	}
+
+	for _, msg := range messages {
+		lower := strings.ToLower(msg.Content)
+		for _, kw := range toolBlockers {
+			if strings.Contains(lower, kw) {
+				return false
+			}
+		}
+	}
+
+	// Only truly simple operations are background tasks
 	backgroundKeywords := []string{
-		// File operations
-		"read file", "view file", "show file", "cat file",
-		"list directory", "ls -", "dir listing",
-		// Search operations
-		"grep", "search", "find pattern",
-		// Simple info
+		"list directory", "ls -", "dir",
+		"show file", "view file", "cat file",
 		"what is", "what's", "tell me about",
-		// Quick checks
-		"check if", "verify that", "validate",
+		"check status", "show status",
 	}
 
 	for _, msg := range messages {
