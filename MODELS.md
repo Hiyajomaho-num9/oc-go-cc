@@ -20,6 +20,17 @@ Comprehensive guide to OpenCode Go models with capabilities, costs, and routing 
 | **GLM-5** | **1,150** | ★☆☆☆☆ | ★★★★☆ |
 | **GLM-5.1** | **880** | ☆☆☆☆☆ | ★★★★★ |
 
+## Important: API Endpoints
+
+⚠️ **Critical:** Not all models use the same API endpoint! oc-go-cc handles this automatically, but you should know:
+
+| Models | Endpoint | Format |
+|--------|----------|--------|
+| GLM-5, GLM-5.1, Kimi K2.5, MiMo-V2-Pro, MiMo-V2-Omni, Qwen3.5 Plus, Qwen3.6 Plus | `https://opencode.ai/zen/go/v1/chat/completions` | OpenAI-compatible |
+| **MiniMax M2.5, MiniMax M2.7** | `https://opencode.ai/zen/go/v1/messages` | **Anthropic-compatible** |
+
+**Why this matters:** MiniMax models expect Anthropic format natively. oc-go-cc detects MiniMax models and routes them to the correct endpoint automatically without transformation. This means MiniMax models work seamlessly with Claude Code.
+
 ## Cost-Conscious Routing Strategy
 
 ### Default to Cheap, Upgrade When Necessary
@@ -101,6 +112,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 
 #### MiniMax M2.5 — Long Context on a Budget
 - **Model ID:** `minimax-m2.5`
+- **Endpoint:** **Anthropic-compatible** (`/v1/messages`)
 - **Cost:** **6,300 requests per $12**
 - **Context:** **~1M tokens** (1 million!)
 - **Quality:** ★★☆☆☆ (acceptable)
@@ -110,6 +122,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
   - Long conversations
   - Multi-file context
 - **When to Use:** When you need 1M context but want to minimize cost
+- **Note:** Uses Anthropic endpoint - oc-go-cc handles this automatically
 
 ### Balanced Models (Quality + Cost)
 

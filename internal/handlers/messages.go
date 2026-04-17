@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -161,10 +162,10 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 
 	if isStreaming {
 		// Streaming: use ProxyStream for real-time SSE transformation
-		h.handleStreaming(w, r, &anthropicReq, modelChain)
+		h.handleStreaming(w, r, &anthropicReq, modelChain, rawBody)
 	} else {
 		// Non-streaming: execute with fallback and return full response
-		h.handleNonStreaming(w, r, &anthropicReq, modelChain)
+		h.handleNonStreaming(w, r, &anthropicReq, modelChain, rawBody)
 	}
 }
 
@@ -174,6 +175,7 @@ func (h *MessagesHandler) handleStreaming(
 	r *http.Request,
 	anthropicReq *types.MessageRequest,
 	modelChain []config.ModelConfig,
+	rawBody json.RawMessage,
 ) {
 	ctx := r.Context()
 	rw := &responseWriter{ResponseWriter: w}
@@ -181,7 +183,18 @@ func (h *MessagesHandler) handleStreaming(
 	for _, model := range modelChain {
 		h.logger.Info("attempting streaming model", "model", model.ModelID)
 
-		// Transform request to OpenAI format
+		// Check if this is an Anthropic-native model (MiniMax)
+		if client.IsAnthropicModel(model.ModelID) {
+			// For MiniMax models, send raw Anthropic request to Anthropic endpoint
+			if err := h.handleAnthropicStreaming(ctx, rw, rawBody, model.ModelID); err != nil {
+				h.logger.Warn("anthropic streaming failed", "model", model.ModelID, "error", err)
+				continue
+			}
+			h.logger.Info("streaming completed", "model", model.ModelID)
+			return
+		}
+
+		// For OpenAI-compatible models, transform and send to OpenAI endpoint
 		openaiReq, err := h.requestTransformer.TransformRequest(anthropicReq, model)
 		if err != nil {
 			h.logger.Warn("request transform failed", "model", model.ModelID, "error", err)
@@ -189,7 +202,7 @@ func (h *MessagesHandler) handleStreaming(
 		}
 
 		// Get streaming body from upstream
-		streamBody, err := h.client.GetStreamingBody(ctx, openaiReq)
+		streamBody, err := h.client.GetStreamingBody(ctx, model.ModelID, openaiReq)
 		if err != nil {
 			h.logger.Warn("streaming request failed", "model", model.ModelID, "error", err)
 			continue
@@ -213,6 +226,33 @@ func (h *MessagesHandler) handleStreaming(
 		// Headers already sent - send error as SSE event
 		h.sendStreamError(rw, "all upstream models failed")
 	}
+}
+
+// handleAnthropicStreaming sends a raw Anthropic request to the Anthropic endpoint.
+func (h *MessagesHandler) handleAnthropicStreaming(
+	ctx context.Context,
+	w http.ResponseWriter,
+	rawBody json.RawMessage,
+	modelID string,
+) error {
+	// Send raw Anthropic request to Anthropic endpoint
+	resp, err := h.client.SendAnthropicRequest(ctx, rawBody, true)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Copy the response directly (already in Anthropic format)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return fmt.Errorf("failed to copy response: %w", err)
+	}
+
+	return nil
 }
 
 // sendStreamError sends an error event in the SSE stream.
@@ -242,6 +282,7 @@ func (h *MessagesHandler) handleNonStreaming(
 	r *http.Request,
 	anthropicReq *types.MessageRequest,
 	modelChain []config.ModelConfig,
+	rawBody json.RawMessage,
 ) {
 	ctx := r.Context()
 
@@ -249,7 +290,12 @@ func (h *MessagesHandler) handleNonStreaming(
 		ctx,
 		modelChain,
 		func(ctx context.Context, model config.ModelConfig) ([]byte, error) {
-			return h.executeRequest(ctx, anthropicReq, model)
+			// Check if this is an Anthropic-native model (MiniMax)
+			if client.IsAnthropicModel(model.ModelID) {
+				return h.executeAnthropicRequest(ctx, rawBody, model)
+			}
+			// Otherwise use OpenAI transformation
+			return h.executeOpenAIRequest(ctx, anthropicReq, model)
 		},
 	)
 
@@ -268,8 +314,32 @@ func (h *MessagesHandler) handleNonStreaming(
 	w.Write(responseBody)
 }
 
-// executeRequest executes a single non-streaming request to OpenCode Go.
-func (h *MessagesHandler) executeRequest(
+// executeAnthropicRequest executes a request to the Anthropic endpoint (for MiniMax models).
+func (h *MessagesHandler) executeAnthropicRequest(
+	ctx context.Context,
+	rawBody json.RawMessage,
+	model config.ModelConfig,
+) ([]byte, error) {
+	// Send raw Anthropic request to Anthropic endpoint
+	resp, err := h.client.SendAnthropicRequest(ctx, rawBody, false)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read the response (already in Anthropic format)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	h.logger.Debug("anthropic response", "body", string(body))
+
+	return body, nil
+}
+
+// executeOpenAIRequest executes a request to the OpenAI endpoint with transformation.
+func (h *MessagesHandler) executeOpenAIRequest(
 	ctx context.Context,
 	anthropicReq *types.MessageRequest,
 	model config.ModelConfig,
@@ -285,7 +355,7 @@ func (h *MessagesHandler) executeRequest(
 	h.logger.Debug("transformed OpenAI request", "body", string(reqJSON))
 
 	// Handle non-streaming.
-	resp, err := h.client.ChatCompletionNonStreaming(ctx, openaiReq)
+	resp, err := h.client.ChatCompletionNonStreaming(ctx, model.ModelID, openaiReq)
 	if err != nil {
 		return nil, fmt.Errorf("chat completion failed: %w", err)
 	}

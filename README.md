@@ -283,7 +283,7 @@ Quick reference:
 
 > **💡 Tip:** The cost column shows approximate requests per 5-hour block ($12). Qwen3.5 Plus gives you ~10x more requests than GLM-5.1!
 
-> **Note:** MiniMax models officially use the Anthropic-compatible `/v1/messages` endpoint, but oc-go-cc handles this automatically. All requests go through the OpenAI-compatible endpoint for consistency.
+> **⚠️ Important:** MiniMax M2.5 and M2.7 use the **Anthropic-compatible** `/v1/messages` endpoint natively. oc-go-cc automatically routes these models to the correct endpoint and skips the OpenAI transformation, so they work seamlessly with Claude Code. See [MODELS.md](MODELS.md) for details.
 
 ## CLI Commands
 

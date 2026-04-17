@@ -72,6 +72,7 @@
 
   "opencode_go": {
     "base_url": "https://opencode.ai/zen/go/v1/chat/completions",
+    "anthropic_base_url": "https://opencode.ai/zen/go/v1/messages",
     "timeout_ms": 300000
   },
 

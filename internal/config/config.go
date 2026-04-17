@@ -23,8 +23,9 @@ type ModelConfig struct {
 
 // OpenCodeGoConfig holds the upstream OpenCode Go API settings.
 type OpenCodeGoConfig struct {
-	BaseURL   string `json:"base_url"`
-	TimeoutMs int    `json:"timeout_ms"`
+	BaseURL          string `json:"base_url"`
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+	TimeoutMs        int    `json:"timeout_ms"`
 }
 
 // LoggingConfig controls application logging behavior.

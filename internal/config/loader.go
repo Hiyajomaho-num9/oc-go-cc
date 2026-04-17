@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	defaultConfigPath = "~/.config/oc-go-cc/config.json"
-	defaultHost       = "127.0.0.1"
-	defaultPort       = 3456
-	defaultBaseURL    = "https://opencode.ai/zen/go/v1/chat/completions"
-	defaultTimeoutMs  = 300000
-	defaultLogLevel   = "info"
+	defaultConfigPath       = "~/.config/oc-go-cc/config.json"
+	defaultHost             = "127.0.0.1"
+	defaultPort             = 3456
+	defaultBaseURL          = "https://opencode.ai/zen/go/v1/chat/completions"
+	defaultAnthropicBaseURL = "https://opencode.ai/zen/go/v1/messages"
+	defaultTimeoutMs        = 300000
+	defaultLogLevel         = "info"
 )
 
 // envVarPattern matches ${ENV_VAR} placeholders in config values.
@@ -126,6 +127,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.OpenCodeGo.BaseURL == "" {
 		cfg.OpenCodeGo.BaseURL = defaultBaseURL
+	}
+	if cfg.OpenCodeGo.AnthropicBaseURL == "" {
+		cfg.OpenCodeGo.AnthropicBaseURL = defaultAnthropicBaseURL
 	}
 	if cfg.OpenCodeGo.TimeoutMs == 0 {
 		cfg.OpenCodeGo.TimeoutMs = defaultTimeoutMs
