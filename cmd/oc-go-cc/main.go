@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"oc-go-cc/internal/config"
+	"oc-go-cc/internal/daemon"
 	"oc-go-cc/internal/server"
 )
 
@@ -40,6 +40,7 @@ Configuration is stored at ~/.config/oc-go-cc/config.json`,
 	rootCmd.AddCommand(initCmd())
 	rootCmd.AddCommand(validateCmd())
 	rootCmd.AddCommand(modelsCmd())
+	rootCmd.AddCommand(autostartCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -50,11 +51,22 @@ Configuration is stored at ~/.config/oc-go-cc/config.json`,
 func serveCmd() *cobra.Command {
 	var configPath string
 	var port int
+	var background bool
+	var daemonize bool // hidden internal flag
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the proxy server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Handle background mode: fork and exit parent
+			if background && !daemonize {
+				opts := daemon.BackgroundOpts{
+					ConfigPath: configPath,
+					Port:       port,
+				}
+				return daemon.ForkIntoBackground(opts)
+			}
+
 			// Override config path if provided.
 			if configPath != "" {
 				os.Setenv("OC_GO_CC_CONFIG", configPath)
@@ -70,12 +82,25 @@ func serveCmd() *cobra.Command {
 				cfg.Port = port
 			}
 
+			// Daemonize setup (child process after re-exec)
+			if daemonize {
+				paths, err := daemon.DefaultPaths()
+				if err != nil {
+					return err
+				}
+				if err := paths.EnsureConfigDir(); err != nil {
+					return err
+				}
+				if err := daemon.DaemonizeSetup(paths); err != nil {
+					return err
+				}
+			}
+
 			// Check if already running.
 			pidPath := getPIDPath()
-			if pid, err := server.ReadPID(pidPath); err == nil {
+			if pid, err := daemon.GetPID(pidPath); err == nil {
 				// Check if process is still running.
-				process, err := os.FindProcess(pid)
-				if err == nil && process.Signal(syscall.Signal(0)) == nil {
+				if daemon.IsProcessRunning(pid) {
 					return fmt.Errorf("server is already running (PID %d)", pid)
 				}
 				// Stale PID file, clean up.
@@ -83,7 +108,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Write PID file.
-			if err := server.WritePID(pidPath); err != nil {
+			if err := daemon.WritePID(pidPath, os.Getpid()); err != nil {
 				return fmt.Errorf("failed to write PID file: %w", err)
 			}
 			defer os.Remove(pidPath)
@@ -109,6 +134,10 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
 	cmd.Flags().IntVarP(&port, "port", "p", 0, "Override listen port")
+	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run as background daemon")
+	cmd.Flags().BoolVar(&daemonize, "_daemonize", false, "Internal use only")
+	cmd.Flags().MarkHidden("_daemonize")
+
 	return cmd
 }
 
@@ -119,17 +148,12 @@ func stopCmd() *cobra.Command {
 		Short: "Stop the proxy server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pidPath := getPIDPath()
-			pid, err := server.ReadPID(pidPath)
+			pid, err := daemon.GetPID(pidPath)
 			if err != nil {
 				return fmt.Errorf("server is not running (no PID file)")
 			}
 
-			process, err := os.FindProcess(pid)
-			if err != nil {
-				return fmt.Errorf("failed to find process: %w", err)
-			}
-
-			if err := process.Signal(syscall.SIGTERM); err != nil {
+			if err := daemon.StopProcess(pid); err != nil {
 				return fmt.Errorf("failed to stop server: %w", err)
 			}
 
@@ -147,14 +171,13 @@ func statusCmd() *cobra.Command {
 		Short: "Check server status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pidPath := getPIDPath()
-			pid, err := server.ReadPID(pidPath)
+			pid, err := daemon.GetPID(pidPath)
 			if err != nil {
 				fmt.Println("Server is not running")
 				return nil
 			}
 
-			process, err := os.FindProcess(pid)
-			if err != nil || process.Signal(syscall.Signal(0)) != nil {
+			if !daemon.IsProcessRunning(pid) {
 				fmt.Println("Server is not running (stale PID file)")
 				os.Remove(pidPath)
 				return nil
@@ -266,9 +289,59 @@ func getConfigDir() string {
 	return filepath.Join(home, ".config", "oc-go-cc")
 }
 
+// autostartCmd returns the command to manage autostart on login.
+func autostartCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "autostart",
+		Short: "Manage auto-start on login",
+	}
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "enable",
+		Short: "Enable auto-start on login",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var configPath string
+			var port int
+			if cmd.Flags().Changed("config") {
+				configPath, _ = cmd.Flags().GetString("config")
+			}
+			if cmd.Flags().Changed("port") {
+				port, _ = cmd.Flags().GetInt("port")
+			}
+			return daemon.EnableAutostart(configPath, port)
+		},
+	})
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "disable",
+		Short: "Disable auto-start on login",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return daemon.DisableAutostart()
+		},
+	})
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Check auto-start status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return daemon.AutostartStatus()
+		},
+	})
+
+	cmd.PersistentFlags().StringP("config", "c", "", "Path to config file")
+	cmd.PersistentFlags().IntP("port", "p", 0, "Override listen port")
+
+	return cmd
+}
+
 // getPIDPath returns the path to the PID file.
 func getPIDPath() string {
-	return filepath.Join(os.TempDir(), pidFileName)
+	paths, err := daemon.DefaultPaths()
+	if err != nil {
+		// Fallback to temp dir if home dir cannot be determined
+		return filepath.Join(os.TempDir(), pidFileName)
+	}
+	return paths.PIDFile
 }
 
 // maskString masks all but the first `visible` characters of a string.
