@@ -18,6 +18,8 @@ OpenCode Go gives you access to powerful open coding models for **$5/month** (th
 - **Tool Calling** — Proper Anthropic tool_use/tool_result ↔ OpenAI function calling translation
 - **Token Counting** — Uses tiktoken (cl100k_base) for accurate token counting and context threshold detection
 - **JSON Configuration** — Flexible config file with environment variable overrides and `${VAR}` interpolation
+- **Background Mode** — Run as daemon detached from terminal
+- **Auto-start on Login** — Launch on system startup via launchd (macOS)
 
 ## Installation
 
@@ -99,6 +101,38 @@ Configure Claude Code with:
   export ANTHROPIC_AUTH_TOKEN=unused
 ```
 
+#### Running in Background
+
+To run the proxy in the background (detached from terminal):
+
+```bash
+oc-go-cc serve --background
+# or
+oc-go-cc serve -b
+```
+
+This starts the server as a background daemon and returns immediately. Logs are written to `~/.config/oc-go-cc/oc-go-cc.log`.
+
+#### Auto-start on Login
+
+To start the proxy automatically when you log in:
+
+```bash
+oc-go-cc autostart enable
+```
+
+This creates a launchd plist on macOS. To disable:
+
+```bash
+oc-go-cc autostart disable
+```
+
+Check status:
+
+```bash
+oc-go-cc autostart status
+```
+
 ### 4. Configure Claude Code
 
 In a separate terminal (or the same one before running `claude`):
@@ -165,7 +199,7 @@ Override with `OC_GO_CC_CONFIG` environment variable.
   "models": {
     "default": {
       "provider": "opencode-go",
-      "model_id": "kimi-k2.5",
+      "model_id": "kimi-k2.6",
       "temperature": 0.7,
       "max_tokens": 4096
     },
@@ -238,7 +272,7 @@ The proxy automatically detects the type of request and routes to the appropriat
 | **Complex** | "architect", "refactor", "complex" in system prompt | GLM-5.1 | Best reasoning & architectural understanding |
 | **Think** | "think", "plan", "reason" in system prompt | GLM-5 | Good reasoning, cheaper than GLM-5.1 |
 | **Background** | "read file", "grep", "list directory" | Qwen3.5 Plus | Cheapest (~10K req/5hr), perfect for simple ops |
-| **Default** | Everything else | Kimi K2.5 | Best balance of quality & cost (~1.8K req/5hr) |
+| **Default** | Everything else | Kimi K2.6 | Best balance of quality & cost (~1.8K req/5hr) |
 
 **📖 See [MODELS.md](MODELS.md) for detailed model capabilities, costs, and routing recommendations.**
 
@@ -246,7 +280,7 @@ The proxy automatically detects the type of request and routes to the appropriat
 
 | Scenario | Trigger | Config Key | Default Model |
 |----------|---------|------------|---------------|
-| **Default** | Standard chat | `models.default` | `kimi-k2.5` |
+| **Default** | Standard chat | `models.default` | `kimi-k2.6` |
 | **Think** | System prompt contains "think", "plan", "reason"; or thinking content blocks | `models.think` | `glm-5.1` |
 | **Long Context** | Token count exceeds `context_threshold` | `models.long_context` | `minimax-m2.7` |
 | **Background** | File read, directory list, grep patterns | `models.background` | `qwen3.5-plus` |
@@ -273,7 +307,8 @@ Quick reference:
 |----------|---------|---------|----------------|----------|
 | `glm-5.1` | ★★★★★ | 200K | ~880 | Complex architecture, difficult tasks |
 | `glm-5` | ★★★★☆ | 200K | ~1,150 | High-quality coding, refactoring |
-| `kimi-k2.5` | ★★★★☆ | 256K | ~1,850 | **Default** - best balance |
+| `kimi-k2.6` | ★★★★★ | 256K | ~1,850 | **Default** - best balance |
+| `kimi-k2.5` | ★★★★☆ | 256K | ~1,850 | Fallback - solid quality |
 | `mimo-v2-pro` | ★★★★☆ | 128K | ~1,290 | Code completion, generation |
 | `mimo-v2-omni` | ★★★☆☆ | 256K | ~2,150 | Fast prototyping |
 | `qwen3.6-plus` | ★★★☆☆ | 128K | ~3,300 | Cost-effective general coding |
@@ -289,10 +324,14 @@ Quick reference:
 
 ```
 oc-go-cc serve              Start the proxy server
+oc-go-cc serve -b          Start in background (detached from terminal)
 oc-go-cc serve --port 8080  Start on a custom port
 oc-go-cc serve --config /path/to/config.json  Use a custom config
 oc-go-cc stop               Stop the running proxy server
 oc-go-cc status             Check if the proxy is running
+oc-go-cc autostart enable   Enable auto-start on login
+oc-go-cc autostart disable  Disable auto-start on login
+oc-go-cc autostart status   Check autostart status
 oc-go-cc init               Create default configuration file
 oc-go-cc validate           Validate configuration file
 oc-go-cc models             List available OpenCode Go models

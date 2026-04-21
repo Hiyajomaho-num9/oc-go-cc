@@ -83,7 +83,7 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 	return ScenarioResult{
 		Scenario:   ScenarioDefault,
 		TokenCount: tokenCount,
-		Reason:     "default scenario (use Kimi K2.5)",
+		Reason:     "default scenario (use Kimi K2.6)",
 	}
 }
 

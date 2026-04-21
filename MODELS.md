@@ -8,26 +8,27 @@ Comprehensive guide to OpenCode Go models with capabilities, costs, and routing 
 
 > 💰 **Cost-conscious routing matters!** GLM-5.1 gives you 880 requests per 5-hour block, while Qwen3.5 Plus gives you **10,200** — that's **11.6x more requests** for the same $12 budget.
 
-| Model | Requests per $12 (5hr) | Cost Efficiency | Quality |
-|-------|------------------------|-----------------|---------|
-| **Qwen3.5 Plus** | **10,200** | ★★★★★ | ★★☆☆☆ |
-| **MiniMax M2.5** | **6,300** | ★★★★★ | ★★☆☆☆ |
-| **MiniMax M2.7** | **3,400** | ★★★★☆ | ★★★☆☆ |
-| **Qwen3.6 Plus** | **3,300** | ★★★★☆ | ★★★☆☆ |
-| **MiMo-V2-Omni** | **2,150** | ★★★☆☆ | ★★★☆☆ |
-| **Kimi K2.5** | **1,850** | ★★☆☆☆ | ★★★★☆ |
-| **MiMo-V2-Pro** | **1,290** | ★★☆☆☆ | ★★★★☆ |
-| **GLM-5** | **1,150** | ★☆☆☆☆ | ★★★★☆ |
-| **GLM-5.1** | **880** | ☆☆☆☆☆ | ★★★★★ |
+| Model            | Requests per $12 (5hr) | Cost Efficiency | Quality |
+| ---------------- | ---------------------- | --------------- | ------- |
+| **Qwen3.5 Plus** | **10,200**             | ★★★★★           | ★★☆☆☆   |
+| **MiniMax M2.5** | **6,300**              | ★★★★★           | ★★☆☆☆   |
+| **MiniMax M2.7** | **3,400**              | ★★★★☆           | ★★★☆☆   |
+| **Qwen3.6 Plus** | **3,300**              | ★★★★☆           | ★★★☆☆   |
+| **MiMo-V2-Omni** | **2,150**              | ★★★☆☆           | ★★★☆☆   |
+| **Kimi K2.6**    | **~1,150**             | ★★☆☆☆           | ★★★★★   |
+| **Kimi K2.5**    | **1,850**              | ★★☆☆☆           | ★★★★☆   |
+| **MiMo-V2-Pro**  | **1,290**              | ★★☆☆☆           | ★★★★☆   |
+| **GLM-5**        | **1,150**              | ★☆☆☆☆           | ★★★★☆   |
+| **GLM-5.1**      | **880**                | ☆☆☆☆☆           | ★★★★★   |
 
 ## Important: API Endpoints
 
 ⚠️ **Critical:** Not all models use the same API endpoint! oc-go-cc handles this automatically, but you should know:
 
-| Models | Endpoint | Format |
-|--------|----------|--------|
-| GLM-5, GLM-5.1, Kimi K2.5, MiMo-V2-Pro, MiMo-V2-Omni, Qwen3.5 Plus, Qwen3.6 Plus | `https://opencode.ai/zen/go/v1/chat/completions` | OpenAI-compatible |
-| **MiniMax M2.5, MiniMax M2.7** | `https://opencode.ai/zen/go/v1/messages` | **Anthropic-compatible** |
+| Models                                                                                      | Endpoint                                         | Format                   |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------ |
+| GLM-5, GLM-5.1, Kimi K2.6, Kimi K2.5, MiMo-V2-Pro, MiMo-V2-Omni, Qwen3.5 Plus, Qwen3.6 Plus | `https://opencode.ai/zen/go/v1/chat/completions` | OpenAI-compatible        |
+| **MiniMax M2.5, MiniMax M2.7**                                                              | `https://opencode.ai/zen/go/v1/messages`         | **Anthropic-compatible** |
 
 **Why this matters:** MiniMax models expect Anthropic format natively. oc-go-cc detects MiniMax models and routes them to the correct endpoint automatically without transformation. This means MiniMax models work seamlessly with Claude Code.
 
@@ -46,27 +47,33 @@ Comprehensive guide to OpenCode Go models with capabilities, costs, and routing 
 ```json
 {
   "models": {
-    "budget": {          // Default for most tasks
+    "budget": {
+      // Default for most tasks
       "model_id": "qwen3.6-plus",
       "max_tokens": 4096
     },
-    "background": {      // Simple operations
+    "background": {
+      // Simple operations
       "model_id": "qwen3.5-plus",
       "max_tokens": 2048
     },
-    "default": {         // Better quality, moderate cost
-      "model_id": "kimi-k2.5",
+    "default": {
+      // Better quality, moderate cost
+      "model_id": "kimi-k2.6",
       "max_tokens": 4096
     },
-    "long_context": {    // Large files only
+    "long_context": {
+      // Large files only
       "model_id": "minimax-m2.5",
       "context_threshold": 80000
     },
-    "think": {           // Reasoning tasks
+    "think": {
+      // Reasoning tasks
       "model_id": "glm-5",
       "max_tokens": 8192
     },
-    "complex": {         // Complex architecture only
+    "complex": {
+      // Complex architecture only
       "model_id": "glm-5.1",
       "max_tokens": 4096
     }
@@ -89,7 +96,7 @@ Is it a reasoning/planning task?
 Is it complex architecture or critical code?
 ├── YES → Use GLM-5.1 (880 req/$12)
 │
-Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
+Default → Use Kimi K2.6 (1,850 req/$12, ★★★★★) or Qwen3.6 Plus (3,300 req/$12)
 ```
 
 ## Detailed Model Profiles
@@ -97,6 +104,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 ### Budget Champions 💰
 
 #### Qwen3.5 Plus — The Workhorse
+
 - **Model ID:** `qwen3.5-plus`
 - **Cost:** **10,200 requests per $12** (best value!)
 - **Context:** ~128K tokens
@@ -111,6 +119,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 - **When to Use:** When you need to do lots of operations cheaply
 
 #### MiniMax M2.5 — Long Context on a Budget
+
 - **Model ID:** `minimax-m2.5`
 - **Endpoint:** **Anthropic-compatible** (`/v1/messages`)
 - **Cost:** **6,300 requests per $12**
@@ -127,6 +136,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 ### Balanced Models (Quality + Cost)
 
 #### Qwen3.6 Plus — Cost-Effective General Coding ⭐ RECOMMENDED DEFAULT
+
 - **Model ID:** `qwen3.6-plus`
 - **Cost:** **3,300 requests per $12** (3.8x more than GLM-5.1!)
 - **Context:** ~128K tokens
@@ -139,7 +149,22 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
   - Refactoring
 - **When to Use:** Default for cost-conscious users
 
-#### Kimi K2.5 — Quality + Reasonable Cost
+#### Kimi K2.6 — Best Quality at Balanced Cost
+
+- **Model ID:** `kimi-k2.6`
+- **Cost:** **~1,850 requests per $12**
+- **Context:** ~256K tokens (successor to K2.5 with improvements)
+- **Quality:** ★★★★★ (excellent — successor improvements)
+- **Speed:** Fast
+- **Best For:**
+  - Complex coding tasks
+  - Code review
+  - Architecture discussions
+  - General-purpose default (best quality-to-cost ratio)
+- **When to Use:** Default choice — better quality than K2.5 at similar cost
+
+#### Kimi K2.5 — Quality + Reasonable Cost (Predecessor)
+
 - **Model ID:** `kimi-k2.5`
 - **Cost:** **1,850 requests per $12**
 - **Context:** ~256K tokens (2x most others)
@@ -155,6 +180,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 ### Premium Models (Use Sparingly!)
 
 #### GLM-5 — Reasoning Specialist
+
 - **Model ID:** `glm-5`
 - **Cost:** **1,150 requests per $12** (9x more expensive than Qwen3.5 Plus!)
 - **Context:** ~200K tokens
@@ -167,6 +193,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 - **When to Use:** When reasoning/planning is required and budget models fail
 
 #### GLM-5.1 — Maximum Quality
+
 - **Model ID:** `glm-5.1`
 - **Cost:** **880 requests per $12** (11.6x more expensive than Qwen3.5 Plus!)
 - **Context:** ~200K tokens
@@ -182,6 +209,7 @@ Default → Use Qwen3.6 Plus (3,300 req/$12) or Kimi K2.5 (1,850 req/$12)
 ## Usage Limits
 
 OpenCode Go limits:
+
 - **5-hour limit:** $12 of usage
 - **Weekly limit:** $30 of usage
 - **Monthly limit:** $60 of usage
@@ -190,18 +218,19 @@ OpenCode Go limits:
 
 **Scenario:** You want to make 5,000 requests this month.
 
-| Model | Cost | Can you do it? |
-|-------|------|----------------|
-| Qwen3.5 Plus | ~$6 | ✅ Yes, easily |
-| MiniMax M2.5 | ~$10 | ✅ Yes |
-| Qwen3.6 Plus | ~$18 | ✅ Yes |
-| Kimi K2.5 | ~$32 | ❌ Exceeds $30 weekly |
-| GLM-5 | ~$52 | ❌ Exceeds limits |
-| GLM-5.1 | ~$68 | ❌ Exceeds limits |
+| Model        | Cost | Can you do it?        |
+| ------------ | ---- | --------------------- |
+| Qwen3.5 Plus | ~$6  | ✅ Yes, easily        |
+| MiniMax M2.5 | ~$10 | ✅ Yes                |
+| Qwen3.6 Plus | ~$18 | ✅ Yes                |
+| Kimi K2.5    | ~$32 | ❌ Exceeds $30 weekly |
+| GLM-5        | ~$52 | ❌ Exceeds limits     |
+| GLM-5.1      | ~$68 | ❌ Exceeds limits     |
 
 ### Optimizing Your Usage
 
 **Strategy 1: Tiered Approach**
+
 ```
 1. Start with Qwen3.6 Plus (cheap, good quality)
 2. If it fails, try Kimi K2.5 (better quality)
@@ -210,6 +239,7 @@ OpenCode Go limits:
 ```
 
 **Strategy 2: Task-Based Selection**
+
 ```
 Background ops (grep, ls, cat) → Qwen3.5 Plus
 General coding → Qwen3.6 Plus or Kimi K2.5
@@ -223,27 +253,15 @@ Critical review → GLM-5.1 (rarely)
 ```json
 {
   "fallbacks": {
-    "budget": [
-      { "model_id": "kimi-k2.5" },
-      { "model_id": "mimo-v2-pro" }
-    ],
+    "budget": [{ "model_id": "kimi-k2.6" }, { "model_id": "mimo-v2-pro" }],
     "background": [
       { "model_id": "qwen3.6-plus" },
       { "model_id": "minimax-m2.5" }
     ],
-    "long_context": [
-      { "model_id": "minimax-m2.5" }
-    ],
-    "default": [
-      { "model_id": "mimo-v2-pro" },
-      { "model_id": "qwen3.6-plus" }
-    ],
-    "think": [
-      { "model_id": "kimi-k2.5" }
-    ],
-    "complex": [
-      { "model_id": "glm-5" }
-    ]
+    "long_context": [{ "model_id": "minimax-m2.5" }],
+    "default": [{ "model_id": "mimo-v2-pro" }, { "model_id": "qwen3.6-plus" }],
+    "think": [{ "model_id": "kimi-k2.6" }],
+    "complex": [{ "model_id": "glm-5" }]
   }
 }
 ```
@@ -252,15 +270,15 @@ Critical review → GLM-5.1 (rarely)
 
 ## Quick Reference
 
-| Task Type | Recommended | Cost (req/$12) | Fallback |
-|-----------|-------------|----------------|----------|
-| Read file, ls, grep | Qwen3.5 Plus | 10,200 | Qwen3.6 Plus |
-| General coding | Qwen3.6 Plus | 3,300 | Kimi K2.5 |
-| Complex features | Kimi K2.5 | 1,850 | MiMo-V2-Pro |
-| Long context (>80K) | MiniMax M2.5 | 6,300 | MiniMax M2.7 |
-| Reasoning/planning | GLM-5 | 1,150 | Kimi K2.5 |
-| Critical architecture | GLM-5.1 | 880 | GLM-5 |
-| Bulk operations | Qwen3.5 Plus | 10,200 | MiniMax M2.5 |
+| Task Type             | Recommended  | Cost (req/$12) | Fallback     |
+| --------------------- | ------------ | -------------- | ------------ |
+| Read file, ls, grep   | Qwen3.5 Plus | 10,200         | Qwen3.6 Plus |
+| General coding        | Qwen3.6 Plus | 3,300          | Kimi K2.5    |
+| Complex features      | Kimi K2.6    | 1,850          | Kimi K2.5    |
+| Long context (>80K)   | MiniMax M2.5 | 6,300          | MiniMax M2.7 |
+| Reasoning/planning    | GLM-5        | 1,150          | Kimi K2.5    |
+| Critical architecture | GLM-5.1      | 880            | GLM-5        |
+| Bulk operations       | Qwen3.5 Plus | 10,200         | MiniMax M2.5 |
 
 ## Cost-Saving Tips
 
