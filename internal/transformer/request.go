@@ -202,6 +202,11 @@ func (t *RequestTransformer) transformAssistantMessage(blocks []types.ContentBlo
 		// Some providers require reasoning_content to be present on assistant
 		// tool-call messages whenever thinking mode is enabled, even if the
 		// upstream Anthropic history did not include an explicit thinking block.
+		// Moonshot's validator treats an empty string as missing, so use a
+		// non-empty placeholder when we must provide the field.
+		if reasoningContent == "" {
+			reasoningContent = " "
+		}
 		reasoningContentPtr = &reasoningContent
 	}
 

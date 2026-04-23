@@ -83,9 +83,9 @@ func TestTransformRequestIncludesEmptyReasoningContentForToolCalls(t *testing.T)
 
 	msg := openaiReq.Messages[0]
 	if msg.ReasoningContent == nil {
-		t.Fatal("ReasoningContent = nil, want non-nil empty string")
+		t.Fatal("ReasoningContent = nil, want non-nil placeholder")
 	}
-	if got, want := *msg.ReasoningContent, ""; got != want {
+	if got, want := *msg.ReasoningContent, " "; got != want {
 		t.Fatalf("ReasoningContent = %q, want %q", got, want)
 	}
 }

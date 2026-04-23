@@ -3,3 +3,4 @@ bin/
 *.pid
 .env
 .tmp/
+oc-go-cc

@@ -58,6 +58,15 @@ func (t *ResponseTransformer) TransformResponse(
 func (t *ResponseTransformer) transformContent(msg types.ChatMessage) ([]types.ContentBlock, error) {
 	var blocks []types.ContentBlock
 
+	// Preserve reasoning content as a thinking block so it round-trips correctly
+	// on multi-turn tool-calling conversations.
+	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+		blocks = append(blocks, types.ContentBlock{
+			Type:     "thinking",
+			Thinking: *msg.ReasoningContent,
+		})
+	}
+
 	// Handle tool calls — each becomes a tool_use content block.
 	for _, tc := range msg.ToolCalls {
 		// Arguments come as a JSON string from OpenAI, pass as raw JSON

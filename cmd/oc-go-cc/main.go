@@ -272,6 +272,8 @@ func modelsCmd() *cobra.Command {
 			fmt.Println("  glm-5              OpenAI-compatible")
 			fmt.Println("  kimi-k2.6          OpenAI-compatible")
 			fmt.Println("  kimi-k2.5          OpenAI-compatible")
+			fmt.Println("  mimo-v2.5-pro      OpenAI-compatible")
+			fmt.Println("  mimo-v2.5          OpenAI-compatible")
 			fmt.Println("  mimo-v2-pro        OpenAI-compatible")
 			fmt.Println("  mimo-v2-omni       OpenAI-compatible")
 			fmt.Println("  minimax-m2.7       Anthropic-compatible")
@@ -408,6 +410,7 @@ func getDefaultConfig() string {
   "fallbacks": {
     "budget": [
       { "provider": "opencode-go", "model_id": "kimi-k2.6" },
+      { "provider": "opencode-go", "model_id": "mimo-v2.5-pro" },
       { "provider": "opencode-go", "model_id": "mimo-v2-pro" }
     ],
     "background": [
@@ -415,6 +418,7 @@ func getDefaultConfig() string {
       { "provider": "opencode-go", "model_id": "minimax-m2.5" }
     ],
     "default": [
+      { "provider": "opencode-go", "model_id": "mimo-v2.5-pro" },
       { "provider": "opencode-go", "model_id": "mimo-v2-pro" },
       { "provider": "opencode-go", "model_id": "qwen3.6-plus" }
     ],
@@ -424,6 +428,7 @@ func getDefaultConfig() string {
     ],
     "think": [
       { "provider": "opencode-go", "model_id": "kimi-k2.6" },
+      { "provider": "opencode-go", "model_id": "mimo-v2.5-pro" },
       { "provider": "opencode-go", "model_id": "mimo-v2-pro" }
     ],
     "complex": [
