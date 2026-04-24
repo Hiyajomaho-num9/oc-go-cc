@@ -23,12 +23,14 @@ Run a single test: `go test ./internal/router/ -v`
 **Model routing is config-driven, not code-driven.** Models are defined in `~/.config/oc-go-cc/config.json` — adding a new model does not require code changes (except for `IsAnthropicModel()` if the new model uses the Anthropic endpoint). The router in `internal/router/` selects models by matching request content against scenario patterns defined in `scenarios.go`.
 
 **Two API endpoints:**
+
 - OpenAI endpoint (`/v1/chat/completions`) — used by most models (GLM, Kimi, MiMo, Qwen)
 - Anthropic endpoint (`/v1/messages`) — used only by MiniMax models
 
 `internal/client/opencode.go` routes by model ID via `IsAnthropicModel()`.
 
 **Scenario detection priority** (`internal/router/scenarios.go`):
+
 1. Long Context (>60K tokens) → MiniMax (1M context)
 2. Complex (architectural patterns, tool operations) → GLM-5.1
 3. Think (reasoning keywords in system prompt) → GLM-5

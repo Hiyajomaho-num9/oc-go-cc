@@ -220,11 +220,11 @@ func TestTransformResponseWithCacheTokens(t *testing.T) {
 			},
 		},
 		Usage: types.UsageInfo{
-			PromptTokens:           100,
-			CompletionTokens:       50,
-			TotalTokens:            150,
-			PromptCacheHitTokens:   80,
-			PromptCacheMissTokens:  20,
+			PromptTokens:          100,
+			CompletionTokens:      50,
+			TotalTokens:           150,
+			PromptCacheHitTokens:  80,
+			PromptCacheMissTokens: 20,
 		},
 	}
 

@@ -46,14 +46,14 @@ make install
 
 Download the latest release for your platform from the [Releases page](https://github.com/samueltuyizere/oc-go-cc/releases):
 
-| Platform | File |
-|----------|------|
-| macOS (Apple Silicon) | `oc-go-cc_darwin-arm64` |
-| macOS (Intel) | `oc-go-cc_darwin-amd64` |
-| Linux (x86_64) | `oc-go-cc_linux-amd64` |
-| Linux (ARM64) | `oc-go-cc_linux-arm64` |
-| Windows (x86_64) | `oc-go-cc_windows-amd64.exe` |
-| Windows (ARM64) | `oc-go-cc_windows-arm64.exe` |
+| Platform              | File                         |
+| --------------------- | ---------------------------- |
+| macOS (Apple Silicon) | `oc-go-cc_darwin-arm64`      |
+| macOS (Intel)         | `oc-go-cc_darwin-amd64`      |
+| Linux (x86_64)        | `oc-go-cc_linux-amd64`       |
+| Linux (ARM64)         | `oc-go-cc_linux-arm64`       |
+| Windows (x86_64)      | `oc-go-cc_windows-amd64.exe` |
+| Windows (ARM64)       | `oc-go-cc_windows-arm64.exe` |
 
 ```bash
 # Example: macOS Apple Silicon
@@ -169,15 +169,15 @@ That's it. Claude Code will now route all requests through oc-go-cc to OpenCode 
 
 ### What Gets Transformed
 
-| Anthropic | OpenAI |
-|-----------|--------|
-| `system` (string or array) | `messages[0]` with `role: "system"` |
-| `content: [{"type":"text","text":"..."}]` | `content: "..."` |
-| `tool_use` content blocks | `tool_calls` array |
-| `tool_result` content blocks | `role: "tool"` messages |
-| `thinking` content blocks | Skipped (no equivalent) |
-| `stop_reason: "end_turn"` | `finish_reason: "stop"` |
-| `stop_reason: "tool_use"` | `finish_reason: "tool_calls"` |
+| Anthropic                                                    | OpenAI                                  |
+| ------------------------------------------------------------ | --------------------------------------- |
+| `system` (string or array)                                   | `messages[0]` with `role: "system"`     |
+| `content: [{"type":"text","text":"..."}]`                    | `content: "..."`                        |
+| `tool_use` content blocks                                    | `tool_calls` array                      |
+| `tool_result` content blocks                                 | `role: "tool"` messages                 |
+| `thinking` content blocks                                    | Skipped (no equivalent)                 |
+| `stop_reason: "end_turn"`                                    | `finish_reason: "stop"`                 |
+| `stop_reason: "tool_use"`                                    | `finish_reason: "tool_calls"`           |
 | SSE `message_start` / `content_block_delta` / `message_stop` | SSE `role` / `delta.content` / `[DONE]` |
 
 ## Configuration
@@ -229,12 +229,8 @@ Override with `OC_GO_CC_CONFIG` environment variable.
       { "provider": "opencode-go", "model_id": "glm-5" },
       { "provider": "opencode-go", "model_id": "qwen3.6-plus" }
     ],
-    "think": [
-      { "provider": "opencode-go", "model_id": "glm-5" }
-    ],
-    "long_context": [
-      { "provider": "opencode-go", "model_id": "minimax-m2.5" }
-    ]
+    "think": [{ "provider": "opencode-go", "model_id": "glm-5" }],
+    "long_context": [{ "provider": "opencode-go", "model_id": "minimax-m2.5" }]
   },
 
   "opencode_go": {
@@ -253,37 +249,37 @@ Override with `OC_GO_CC_CONFIG` environment variable.
 
 Environment variables override config file values. Config values also support `${VAR}` interpolation.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OC_GO_CC_API_KEY` | OpenCode Go API key (**required**) | — |
-| `OC_GO_CC_CONFIG` | Custom config file path | `~/.config/oc-go-cc/config.json` |
-| `OC_GO_CC_HOST` | Proxy listen host | `127.0.0.1` |
-| `OC_GO_CC_PORT` | Proxy listen port | `3456` |
-| `OC_GO_CC_OPENCODE_URL` | OpenCode Go API endpoint | `https://opencode.ai/zen/go/v1/chat/completions` |
-| `OC_GO_CC_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `info` |
+| Variable                | Description                                 | Default                                          |
+| ----------------------- | ------------------------------------------- | ------------------------------------------------ |
+| `OC_GO_CC_API_KEY`      | OpenCode Go API key (**required**)          | —                                                |
+| `OC_GO_CC_CONFIG`       | Custom config file path                     | `~/.config/oc-go-cc/config.json`                 |
+| `OC_GO_CC_HOST`         | Proxy listen host                           | `127.0.0.1`                                      |
+| `OC_GO_CC_PORT`         | Proxy listen port                           | `3456`                                           |
+| `OC_GO_CC_OPENCODE_URL` | OpenCode Go API endpoint                    | `https://opencode.ai/zen/go/v1/chat/completions` |
+| `OC_GO_CC_LOG_LEVEL`    | Log level: `debug`, `info`, `warn`, `error` | `info`                                           |
 
 ### Model Routing
 
 The proxy automatically detects the type of request and routes to the appropriate model based on context size and content analysis:
 
-| Scenario | Trigger | Model | Why |
-|----------|---------|-------|-----|
-| **Long Context** | >60K tokens | MiniMax M2.7 | 1M context window vs 128-256K for others |
-| **Complex** | "architect", "refactor", "complex" in system prompt | GLM-5.1 | Best reasoning & architectural understanding |
-| **Think** | "think", "plan", "reason" in system prompt | GLM-5 | Good reasoning, cheaper than GLM-5.1 |
-| **Background** | "read file", "grep", "list directory" | Qwen3.5 Plus | Cheapest (~10K req/5hr), perfect for simple ops |
-| **Default** | Everything else | Kimi K2.6 | Best balance of quality & cost (~1.8K req/5hr) |
+| Scenario         | Trigger                                             | Model        | Why                                             |
+| ---------------- | --------------------------------------------------- | ------------ | ----------------------------------------------- |
+| **Long Context** | >60K tokens                                         | MiniMax M2.7 | 1M context window vs 128-256K for others        |
+| **Complex**      | "architect", "refactor", "complex" in system prompt | GLM-5.1      | Best reasoning & architectural understanding    |
+| **Think**        | "think", "plan", "reason" in system prompt          | GLM-5        | Good reasoning, cheaper than GLM-5.1            |
+| **Background**   | "read file", "grep", "list directory"               | Qwen3.5 Plus | Cheapest (~10K req/5hr), perfect for simple ops |
+| **Default**      | Everything else                                     | Kimi K2.6    | Best balance of quality & cost (~1.8K req/5hr)  |
 
 **📖 See [MODELS.md](MODELS.md) for detailed model capabilities, costs, and routing recommendations.**
 
 #### Routing in Detail:
 
-| Scenario | Trigger | Config Key | Default Model |
-|----------|---------|------------|---------------|
-| **Default** | Standard chat | `models.default` | `kimi-k2.6` |
-| **Think** | System prompt contains "think", "plan", "reason"; or thinking content blocks | `models.think` | `glm-5.1` |
-| **Long Context** | Token count exceeds `context_threshold` | `models.long_context` | `minimax-m2.7` |
-| **Background** | File read, directory list, grep patterns | `models.background` | `qwen3.5-plus` |
+| Scenario         | Trigger                                                                      | Config Key            | Default Model  |
+| ---------------- | ---------------------------------------------------------------------------- | --------------------- | -------------- |
+| **Default**      | Standard chat                                                                | `models.default`      | `kimi-k2.6`    |
+| **Think**        | System prompt contains "think", "plan", "reason"; or thinking content blocks | `models.think`        | `glm-5.1`      |
+| **Long Context** | Token count exceeds `context_threshold`                                      | `models.long_context` | `minimax-m2.7` |
+| **Background**   | File read, directory list, grep patterns                                     | `models.background`   | `qwen3.5-plus` |
 
 Routing priority: **Long Context** → **Think** → **Background** → **Default**
 
@@ -303,18 +299,18 @@ See [MODELS.md](MODELS.md) for **detailed model capabilities, costs, and routing
 
 Quick reference:
 
-| Model ID | Quality | Context | Cost (req/5hr) | Best For |
-|----------|---------|---------|----------------|----------|
-| `glm-5.1` | ★★★★★ | 200K | ~880 | Complex architecture, difficult tasks |
-| `glm-5` | ★★★★☆ | 200K | ~1,150 | High-quality coding, refactoring |
-| `kimi-k2.6` | ★★★★★ | 256K | ~1,850 | **Default** - best balance |
-| `kimi-k2.5` | ★★★★☆ | 256K | ~1,850 | Fallback - solid quality |
-| `mimo-v2-pro` | ★★★★☆ | 128K | ~1,290 | Code completion, generation |
-| `mimo-v2-omni` | ★★★☆☆ | 256K | ~2,150 | Fast prototyping |
-| `qwen3.6-plus` | ★★★☆☆ | 128K | ~3,300 | Cost-effective general coding |
-| `minimax-m2.7` | ★★★☆☆ | **1M** | ~3,400 | **Long context specialist** |
-| `minimax-m2.5` | ★★☆☆☆ | **1M** | ~6,300 | Long context on a budget |
-| `qwen3.5-plus` | ★★☆☆☆ | 128K | ~10,200 | **Cheapest** - background tasks |
+| Model ID       | Quality | Context | Cost (req/5hr) | Best For                              |
+| -------------- | ------- | ------- | -------------- | ------------------------------------- |
+| `glm-5.1`      | ★★★★★   | 200K    | ~880           | Complex architecture, difficult tasks |
+| `glm-5`        | ★★★★☆   | 200K    | ~1,150         | High-quality coding, refactoring      |
+| `kimi-k2.6`    | ★★★★★   | 256K    | ~1,850         | **Default** - best balance            |
+| `kimi-k2.5`    | ★★★★☆   | 256K    | ~1,850         | Fallback - solid quality              |
+| `mimo-v2-pro`  | ★★★★☆   | 128K    | ~1,290         | Code completion, generation           |
+| `mimo-v2-omni` | ★★★☆☆   | 256K    | ~2,150         | Fast prototyping                      |
+| `qwen3.6-plus` | ★★★☆☆   | 128K    | ~3,300         | Cost-effective general coding         |
+| `minimax-m2.7` | ★★★☆☆   | **1M**  | ~3,400         | **Long context specialist**           |
+| `minimax-m2.5` | ★★☆☆☆   | **1M**  | ~6,300         | Long context on a budget              |
+| `qwen3.5-plus` | ★★☆☆☆   | 128K    | ~10,200        | **Cheapest** - background tasks       |
 
 > **💡 Tip:** The cost column shows approximate requests per 5-hour block ($12). Qwen3.5 Plus gives you ~10x more requests than GLM-5.1!
 
@@ -342,11 +338,11 @@ oc-go-cc --version          Show version
 
 The proxy exposes these endpoints that Claude Code expects:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/messages` | Main chat endpoint (Anthropic format) |
-| `POST` | `/v1/messages/count_tokens` | Token counting |
-| `GET` | `/health` | Health check |
+| Method | Path                        | Description                           |
+| ------ | --------------------------- | ------------------------------------- |
+| `POST` | `/v1/messages`              | Main chat endpoint (Anthropic format) |
+| `POST` | `/v1/messages/count_tokens` | Token counting                        |
+| `GET`  | `/health`                   | Health check                          |
 
 ## Troubleshooting
 
