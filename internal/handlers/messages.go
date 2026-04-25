@@ -224,8 +224,6 @@ func (h *MessagesHandler) handleStreaming(
 	// the original context gets canceled and kills all fallbacks.
 	clientCtx := r.Context()
 
-	rw := &responseWriter{ResponseWriter: w}
-
 	// Set SSE headers immediately so Claude Code knows the stream is alive.
 	// This prevents client-side timeouts before we even start sending data.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -236,6 +234,7 @@ func (h *MessagesHandler) handleStreaming(
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+	rw := &responseWriter{ResponseWriter: w, wroteHeader: true}
 
 	// Start heartbeat to keep connection alive while waiting for upstream.
 	// Claude Code times out after ~6 seconds of no data, so we send pings every 3 seconds
@@ -285,6 +284,23 @@ func (h *MessagesHandler) handleStreaming(
 			// For MiniMax models, send raw Anthropic request to Anthropic endpoint
 			// But we need to replace the model name in the raw body
 			modelBody := replaceModelInRawBody(rawBody, model.ModelID)
+			if strings.HasPrefix(model.ModelID, "deepseek-") {
+				modelBody = setStreamInRawBody(modelBody, false)
+				if err := h.handleAnthropicPseudoStreaming(ctx, rw, modelBody, model.ModelID); err != nil {
+					cancel()
+					if clientCtx.Err() == context.Canceled {
+						h.logger.Info("client disconnected during anthropic pseudo stream")
+						return
+					}
+					h.logger.Warn("anthropic pseudo streaming failed", "model", model.ModelID, "error", err)
+					continue
+				}
+				cancel()
+				latency := time.Since(streamStart)
+				h.metrics.RecordSuccess(model.ModelID, latency)
+				h.logger.Info("streaming completed", "model", model.ModelID, "latency", latency)
+				return
+			}
 			if err := h.handleAnthropicStreaming(ctx, rw, modelBody, model.ModelID); err != nil {
 				cancel()
 				// Check if this was a client disconnect
@@ -396,6 +412,19 @@ func replaceModelInRawBody(rawBody json.RawMessage, modelID string) json.RawMess
 	return rawBody
 }
 
+func setStreamInRawBody(rawBody json.RawMessage, stream bool) json.RawMessage {
+	var body map[string]interface{}
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return rawBody
+	}
+	body["stream"] = stream
+	updated, err := json.Marshal(body)
+	if err != nil {
+		return rawBody
+	}
+	return json.RawMessage(updated)
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -436,6 +465,106 @@ func (h *MessagesHandler) handleAnthropicStreaming(
 	}
 
 	return nil
+}
+
+// handleAnthropicPseudoStreaming executes a non-streaming Anthropic-native request and
+// wraps the completed response as Anthropic SSE. Some providers advertise an
+// Anthropic endpoint but do not emit Anthropic-compatible SSE for streaming.
+func (h *MessagesHandler) handleAnthropicPseudoStreaming(
+	ctx context.Context,
+	w http.ResponseWriter,
+	rawBody json.RawMessage,
+	modelID string,
+) error {
+	body, err := h.executeAnthropicRawRequest(ctx, rawBody)
+	if err != nil {
+		return err
+	}
+
+	var msg types.MessageResponse
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return fmt.Errorf("failed to parse anthropic response: %w", err)
+	}
+	if msg.ID == "" {
+		msg.ID = "msg_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	if msg.Type == "" {
+		msg.Type = "message"
+	}
+	if msg.Role == "" {
+		msg.Role = "assistant"
+	}
+	msg.Model = modelID
+
+	flusher, _ := w.(http.Flusher)
+	startMsg := msg
+	startMsg.Content = []types.ContentBlock{}
+	startMsg.StopReason = ""
+	startMsg.StopSequence = ""
+	startMsg.Usage = types.Usage{}
+	if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "message_start", Message: &startMsg}); err != nil {
+		return err
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	for i, block := range msg.Content {
+		idx := i
+		switch block.Type {
+		case "text":
+			if err := writeAnthropicSSEEvent(w, types.MessageEvent{
+				Type:         "content_block_start",
+				Index:        &idx,
+				ContentBlock: &types.ContentBlock{Type: "text", Text: ""},
+			}); err != nil {
+				return err
+			}
+			if block.Text != "" {
+				if err := writeAnthropicSSEEvent(w, types.MessageEvent{
+					Type:  "content_block_delta",
+					Index: &idx,
+					Delta: &types.Delta{Type: "text_delta", Text: block.Text},
+				}); err != nil {
+					return err
+				}
+			}
+			if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "content_block_stop", Index: &idx}); err != nil {
+				return err
+			}
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	stopReason := msg.StopReason
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	if err := writeAnthropicSSEEvent(w, types.MessageEvent{
+		Type:  "message_delta",
+		Delta: &types.Delta{StopReason: stopReason},
+		Usage: &msg.Usage,
+	}); err != nil {
+		return err
+	}
+	if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "message_stop"}); err != nil {
+		return err
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return nil
+}
+
+func writeAnthropicSSEEvent(w http.ResponseWriter, event types.MessageEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, string(data))
+	return err
 }
 
 // sendStreamError sends an error event in the SSE stream.
@@ -508,6 +637,14 @@ func (h *MessagesHandler) executeAnthropicRequest(
 	ctx context.Context,
 	rawBody json.RawMessage,
 	model config.ModelConfig,
+) ([]byte, error) {
+	modelBody := replaceModelInRawBody(rawBody, model.ModelID)
+	return h.executeAnthropicRawRequest(ctx, modelBody)
+}
+
+func (h *MessagesHandler) executeAnthropicRawRequest(
+	ctx context.Context,
+	rawBody json.RawMessage,
 ) ([]byte, error) {
 	// Send raw Anthropic request to Anthropic endpoint
 	resp, err := h.client.SendAnthropicRequest(ctx, rawBody, false)

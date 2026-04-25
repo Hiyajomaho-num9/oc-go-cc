@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -67,9 +68,12 @@ func (h *StreamHandler) ProxyStream(
 
 	// Read directly from response body without buffering.
 	// Use a tight loop with a line buffer - no bufio.Reader.
-	contentIndex := 0
 	var lineBuf bytes.Buffer
-	contentStarted := false
+	state := &streamState{
+		textIndex:  -1,
+		toolBlocks: make(map[int]int),
+		openBlocks: make(map[int]bool),
+	}
 
 	// Read in larger chunks for efficiency, then parse lines
 	readBuf := make([]byte, 4096)
@@ -93,7 +97,7 @@ func (h *StreamHandler) ProxyStream(
 					lineBuf.Reset()
 
 					// Process complete line
-					if err := h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, originalModel); err != nil {
+					if err := h.processSSELine(w, flusher, line, state, originalModel); err != nil {
 						return err
 					}
 				} else {
@@ -106,7 +110,7 @@ func (h *StreamHandler) ProxyStream(
 			// Process any remaining data in buffer
 			if lineBuf.Len() > 0 {
 				line := lineBuf.String()
-				h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, originalModel)
+				h.processSSELine(w, flusher, line, state, originalModel)
 			}
 			break
 		}
@@ -127,14 +131,111 @@ func (h *StreamHandler) ProxyStream(
 	return nil
 }
 
+type streamState struct {
+	nextIndex  int
+	textIndex  int
+	toolBlocks map[int]int
+	openBlocks map[int]bool
+}
+
+func (s *streamState) ensureTextBlock(w http.ResponseWriter) (int, error) {
+	if s.textIndex != -1 && s.openBlocks[s.textIndex] {
+		return s.textIndex, nil
+	}
+
+	idx := s.nextIndex
+	s.nextIndex++
+	s.textIndex = idx
+	s.openBlocks[idx] = true
+
+	startEvent := types.MessageEvent{
+		Type:         "content_block_start",
+		Index:        &idx,
+		ContentBlock: &types.ContentBlock{Type: "text", Text: ""},
+	}
+	if err := writeSSEEvent(w, startEvent); err != nil {
+		return idx, ErrClientDisconnected
+	}
+	return idx, nil
+}
+
+func (s *streamState) stopTextBlock(w http.ResponseWriter) error {
+	if s.textIndex == -1 || !s.openBlocks[s.textIndex] {
+		return nil
+	}
+	idx := s.textIndex
+	if err := writeSSEEvent(w, types.MessageEvent{Type: "content_block_stop", Index: &idx}); err != nil {
+		return ErrClientDisconnected
+	}
+	delete(s.openBlocks, idx)
+	s.textIndex = -1
+	return nil
+}
+
+func (s *streamState) ensureToolBlock(w http.ResponseWriter, streamIndex int, tc types.ToolCall) (int, error) {
+	if idx, ok := s.toolBlocks[streamIndex]; ok {
+		return idx, nil
+	}
+
+	idx := s.nextIndex
+	s.nextIndex++
+	s.toolBlocks[streamIndex] = idx
+	s.openBlocks[idx] = true
+
+	toolID := tc.ID
+	if toolID == "" {
+		toolID = fmt.Sprintf("toolu_%s_%d", generateID(), streamIndex)
+	}
+	toolName := tc.Function.Name
+	if toolName == "" {
+		toolName = fmt.Sprintf("tool_%d", streamIndex)
+	}
+
+	input := json.RawMessage(`{}`)
+	startEvent := types.MessageEvent{
+		Type:  "content_block_start",
+		Index: &idx,
+		ContentBlock: &types.ContentBlock{
+			Type:  "tool_use",
+			ID:    toolID,
+			Name:  toolName,
+			Input: input,
+		},
+	}
+	if err := writeSSEEvent(w, startEvent); err != nil {
+		return idx, ErrClientDisconnected
+	}
+	return idx, nil
+}
+
+func (s *streamState) stopOpenBlocks(w http.ResponseWriter) error {
+	if len(s.openBlocks) == 0 {
+		return nil
+	}
+
+	indices := make([]int, 0, len(s.openBlocks))
+	for idx := range s.openBlocks {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	for _, idx := range indices {
+		if err := writeSSEEvent(w, types.MessageEvent{Type: "content_block_stop", Index: &idx}); err != nil {
+			return ErrClientDisconnected
+		}
+		delete(s.openBlocks, idx)
+	}
+	s.textIndex = -1
+	return nil
+}
+
 // processSSELine processes a single SSE line from upstream.
 // Per deep research: "Treat SSE primarily as a text protocol" - minimize JSON parsing.
 func (h *StreamHandler) processSSELine(
 	w http.ResponseWriter,
 	flusher http.Flusher,
 	line string,
-	contentIndex *int,
-	contentStarted *bool,
+	state *streamState,
 	originalModel string,
 ) error {
 	line = strings.TrimSpace(line)
@@ -168,19 +269,9 @@ func (h *StreamHandler) processSSELine(
 		if end != -1 {
 			content := data[start : start+end]
 			if content != "" {
-				if !*contentStarted {
-					*contentStarted = true
-					// Send content_block_start
-					startEvent := types.MessageEvent{
-						Type:  "content_block_start",
-						Index: contentIndex,
-						Delta: &types.Delta{
-							Type: "text",
-						},
-					}
-					if err := writeSSEEvent(w, startEvent); err != nil {
-						return ErrClientDisconnected
-					}
+				blockIndex, err := state.ensureTextBlock(w)
+				if err != nil {
+					return err
 				}
 
 				// Send content_block_delta
@@ -190,34 +281,36 @@ func (h *StreamHandler) processSSELine(
 				}
 				event := types.MessageEvent{
 					Type:  "content_block_delta",
-					Index: contentIndex,
+					Index: &blockIndex,
 					Delta: &delta,
 				}
 				if err := writeSSEEvent(w, event); err != nil {
 					return ErrClientDisconnected
 				}
 				flusher.Flush()
+				return nil
 			}
-			return nil
 		}
 	}
 
 	// Check for finish_reason - need to send stop events
 	if strings.Contains(data, `"finish_reason":`) && !strings.Contains(data, `"finish_reason":null`) {
-		// Send content_block_stop
-		stopEvent := types.MessageEvent{
-			Type:  "content_block_stop",
-			Index: contentIndex,
+		if err := state.stopOpenBlocks(w); err != nil {
+			return err
 		}
-		if err := writeSSEEvent(w, stopEvent); err != nil {
-			return ErrClientDisconnected
+
+		stopReason := "end_turn"
+		if strings.Contains(data, `"finish_reason":"tool_calls"`) {
+			stopReason = "tool_use"
+		} else if strings.Contains(data, `"finish_reason":"length"`) {
+			stopReason = "max_tokens"
 		}
 
 		// Send message_delta with stop_reason
 		msgDelta := types.MessageEvent{
 			Type: "message_delta",
 			Delta: &types.Delta{
-				StopReason: "end_turn", // Simplified - OpenAI usually sends "stop"
+				StopReason: stopReason,
 			},
 		}
 		if err := writeSSEEvent(w, msgDelta); err != nil {
@@ -242,18 +335,9 @@ func (h *StreamHandler) processSSELine(
 
 	// Handle text content deltas
 	if choice.Delta.Content != "" {
-		if !*contentStarted {
-			*contentStarted = true
-			startEvent := types.MessageEvent{
-				Type:  "content_block_start",
-				Index: contentIndex,
-				Delta: &types.Delta{
-					Type: "text",
-				},
-			}
-			if err := writeSSEEvent(w, startEvent); err != nil {
-				return ErrClientDisconnected
-			}
+		blockIndex, err := state.ensureTextBlock(w)
+		if err != nil {
+			return err
 		}
 
 		delta := types.Delta{
@@ -262,7 +346,7 @@ func (h *StreamHandler) processSSELine(
 		}
 		event := types.MessageEvent{
 			Type:  "content_block_delta",
-			Index: contentIndex,
+			Index: &blockIndex,
 			Delta: &delta,
 		}
 		if err := writeSSEEvent(w, event); err != nil {
@@ -273,18 +357,17 @@ func (h *StreamHandler) processSSELine(
 
 	// Handle tool call deltas
 	if len(choice.Delta.ToolCalls) > 0 {
+		if err := state.stopTextBlock(w); err != nil {
+			return err
+		}
 		for _, tc := range choice.Delta.ToolCalls {
-			*contentIndex++
-
-			startEvent := types.MessageEvent{
-				Type:  "content_block_start",
-				Index: contentIndex,
-				Delta: &types.Delta{
-					Type: "tool_use",
-				},
+			streamIndex := len(state.toolBlocks)
+			if tc.Index != nil {
+				streamIndex = *tc.Index
 			}
-			if err := writeSSEEvent(w, startEvent); err != nil {
-				return ErrClientDisconnected
+			blockIndex, err := state.ensureToolBlock(w, streamIndex, tc)
+			if err != nil {
+				return err
 			}
 
 			if tc.Function.Arguments != "" {
@@ -294,7 +377,7 @@ func (h *StreamHandler) processSSELine(
 				}
 				event := types.MessageEvent{
 					Type:  "content_block_delta",
-					Index: contentIndex,
+					Index: &blockIndex,
 					Delta: &delta,
 				}
 				if err := writeSSEEvent(w, event); err != nil {
@@ -307,12 +390,8 @@ func (h *StreamHandler) processSSELine(
 
 	// Handle finish reason
 	if choice.FinishReason != "" {
-		stopEvent := types.MessageEvent{
-			Type:  "content_block_stop",
-			Index: contentIndex,
-		}
-		if err := writeSSEEvent(w, stopEvent); err != nil {
-			return ErrClientDisconnected
+		if err := state.stopOpenBlocks(w); err != nil {
+			return err
 		}
 
 		var usage *types.Usage
