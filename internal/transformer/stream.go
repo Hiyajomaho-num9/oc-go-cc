@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -265,9 +266,8 @@ func (h *StreamHandler) processSSELine(
 	if idx := strings.Index(data, `"delta":{"content":"`); idx != -1 {
 		// Extract content directly
 		start := idx + len(`"delta":{"content":"`)
-		end := strings.Index(data[start:], `"`)
-		if end != -1 {
-			content := data[start : start+end]
+		content, ok := extractJSONStringValue(data, start)
+		if ok {
 			if content != "" {
 				blockIndex, err := state.ensureTextBlock(w)
 				if err != nil {
@@ -418,6 +418,29 @@ func (h *StreamHandler) processSSELine(
 	}
 
 	return nil
+}
+
+func extractJSONStringValue(data string, start int) (string, bool) {
+	escaped := false
+	for i := start; i < len(data); i++ {
+		switch data[i] {
+		case '\\':
+			escaped = !escaped
+		case '"':
+			if escaped {
+				escaped = false
+				continue
+			}
+			value, err := strconv.Unquote(`"` + data[start:i] + `"`)
+			if err != nil {
+				return "", false
+			}
+			return value, true
+		default:
+			escaped = false
+		}
+	}
+	return "", false
 }
 
 // writeSSEEvent writes a single SSE event to the HTTP response writer.
