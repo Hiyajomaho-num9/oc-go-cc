@@ -48,7 +48,8 @@ dist: clean
 	@mkdir -p dist
 	@echo "Building release binaries (version: $(VERSION))..."
 	@for platform in $(PLATFORMS); do \
-		IFS='-' read -r GOOS GOARCH <<< "$$platform"; \
+		GOOS=$${platform%-*}; \
+		GOARCH=$${platform#*-}; \
 		EXT=""; \
 		[ "$$GOOS" = "windows" ] && EXT=".exe"; \
 		echo "  → $$GOOS/$$GOARCH"; \
