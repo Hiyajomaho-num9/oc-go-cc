@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"oc-go-cc/internal/client"
@@ -41,10 +42,17 @@ type MessagesHandler struct {
 // responseWriter wraps http.ResponseWriter to track if headers were written.
 type responseWriter struct {
 	http.ResponseWriter
+	mu          sync.Mutex
 	wroteHeader bool
 }
 
 func (w *responseWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writeHeaderLocked(code)
+}
+
+func (w *responseWriter) writeHeaderLocked(code int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
 		w.ResponseWriter.WriteHeader(code)
@@ -52,14 +60,18 @@ func (w *responseWriter) WriteHeader(code int) {
 }
 
 func (w *responseWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
+		w.writeHeaderLocked(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
 }
 
 // Flush implements http.Flusher for SSE streaming support.
 func (w *responseWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -230,11 +242,9 @@ func (h *MessagesHandler) handleStreaming(
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	rw := &responseWriter{ResponseWriter: w, wroteHeader: true}
+	rw := &responseWriter{ResponseWriter: w}
+	rw.WriteHeader(http.StatusOK)
+	rw.Flush()
 
 	// Start heartbeat to keep connection alive while waiting for upstream.
 	// Claude Code times out after ~6 seconds of no data, so we send pings every 3 seconds
@@ -247,11 +257,13 @@ func (h *MessagesHandler) handleStreaming(
 		for {
 			select {
 			case <-ticker.C:
-				// Send SSE comment (ignored by client but keeps connection alive)
-				fmt.Fprintf(w, ":keepalive\n\n")
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
+				// Send SSE comment (ignored by client but keeps connection alive).
+				// All SSE writes must go through rw because http.ResponseWriter is
+				// not safe for concurrent writes from heartbeat and stream proxy.
+				if _, err := fmt.Fprint(rw, ":keepalive\n\n"); err != nil {
+					return
 				}
+				rw.Flush()
 			case <-heartbeatDone:
 				return
 			case <-clientCtx.Done():
