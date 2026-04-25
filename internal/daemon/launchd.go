@@ -63,8 +63,8 @@ type PlistData struct {
 	EnvPath    string
 }
 
-// EnableAutostart creates the launchd plist and loads it.
-func EnableAutostart(configPath string, port int) error {
+// enableLaunchdAutostart creates the launchd plist and loads it.
+func enableLaunchdAutostart(configPath string, port int) error {
 	paths, err := DefaultPaths()
 	if err != nil {
 		return err
@@ -124,8 +124,8 @@ func EnableAutostart(configPath string, port int) error {
 	return nil
 }
 
-// DisableAutostart unloads and removes the launchd plist.
-func DisableAutostart() error {
+// disableLaunchdAutostart unloads and removes the launchd plist.
+func disableLaunchdAutostart() error {
 	paths, err := DefaultPaths()
 	if err != nil {
 		return err
@@ -151,8 +151,8 @@ func DisableAutostart() error {
 	return nil
 }
 
-// AutostartStatus reports whether autostart is enabled.
-func AutostartStatus() error {
+// launchdAutostartStatus reports whether autostart is enabled.
+func launchdAutostartStatus() error {
 	paths, err := DefaultPaths()
 	if err != nil {
 		return err

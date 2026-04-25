@@ -10,18 +10,22 @@ import (
 )
 
 const (
-	AppName     = "oc-go-cc"
-	ConfigDir   = ".config/oc-go-cc"
-	LaunchAgent = "com.opencode.oc-go-cc"
+	AppName        = "oc-go-cc"
+	ConfigDir      = ".config/oc-go-cc"
+	EnvFileName    = "oc-go-cc.env"
+	LaunchAgent    = "com.opencode.oc-go-cc"
+	SystemdService = "oc-go-cc.service"
 )
 
 // Paths holds well-known directories and files for the app.
 type Paths struct {
-	ConfigDir  string // ~/.config/oc-go-cc
-	PIDFile    string // ~/.config/oc-go-cc/oc-go-cc.pid
-	LogFile    string // ~/.config/oc-go-cc/oc-go-cc.log
-	PlistPath  string // ~/Library/LaunchAgents/com.opencode.oc-go-cc.plist
-	BinaryPath string // absolute path to the running executable
+	ConfigDir          string // ~/.config/oc-go-cc
+	PIDFile            string // ~/.config/oc-go-cc/oc-go-cc.pid
+	LogFile            string // ~/.config/oc-go-cc/oc-go-cc.log
+	EnvFile            string // ~/.config/oc-go-cc/oc-go-cc.env
+	PlistPath          string // ~/Library/LaunchAgents/com.opencode.oc-go-cc.plist
+	SystemdServicePath string // ~/.config/systemd/user/oc-go-cc.service
+	BinaryPath         string // absolute path to the running executable
 }
 
 // DefaultPaths computes paths from the user's home directory.
@@ -43,11 +47,13 @@ func DefaultPaths() (*Paths, error) {
 
 	configDir := filepath.Join(home, ConfigDir)
 	return &Paths{
-		ConfigDir:  configDir,
-		PIDFile:    filepath.Join(configDir, AppName+".pid"),
-		LogFile:    filepath.Join(configDir, AppName+".log"),
-		PlistPath:  filepath.Join(home, "Library", "LaunchAgents", LaunchAgent+".plist"),
-		BinaryPath: execPath,
+		ConfigDir:          configDir,
+		PIDFile:            filepath.Join(configDir, AppName+".pid"),
+		LogFile:            filepath.Join(configDir, AppName+".log"),
+		EnvFile:            filepath.Join(configDir, EnvFileName),
+		PlistPath:          filepath.Join(home, "Library", "LaunchAgents", LaunchAgent+".plist"),
+		SystemdServicePath: filepath.Join(home, ".config", "systemd", "user", SystemdService),
+		BinaryPath:         execPath,
 	}, nil
 }
 

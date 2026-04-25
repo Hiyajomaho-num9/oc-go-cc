@@ -19,7 +19,7 @@ OpenCode Go gives you access to powerful open coding models for **$5/month** (th
 - **Token Counting** — Uses tiktoken (cl100k_base) for accurate token counting and context threshold detection
 - **JSON Configuration** — Flexible config file with environment variable overrides and `${VAR}` interpolation
 - **Background Mode** — Run as daemon detached from terminal
-- **Auto-start on Login** — Launch on system startup via launchd (macOS)
+- **Auto-start on Login** — Launch on login via launchd (macOS) or systemd user services (Linux)
 
 ## Installation
 
@@ -121,10 +121,36 @@ To start the proxy automatically when you log in:
 oc-go-cc autostart enable
 ```
 
-This creates a launchd plist on macOS. To disable:
+On macOS, this creates a launchd plist at:
+
+```text
+~/Library/LaunchAgents/com.opencode.oc-go-cc.plist
+```
+
+On Linux, this creates a systemd user service at:
+
+```text
+~/.config/systemd/user/oc-go-cc.service
+```
+
+and runs:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable oc-go-cc.service
+systemctl --user restart oc-go-cc.service
+```
+
+To disable:
 
 ```bash
 oc-go-cc autostart disable
+```
+
+On Linux, this stops and disables the user service:
+
+```bash
+systemctl --user disable --now oc-go-cc.service
 ```
 
 Check status:
@@ -132,6 +158,49 @@ Check status:
 ```bash
 oc-go-cc autostart status
 ```
+
+On Linux, you can also inspect the service directly:
+
+```bash
+systemctl --user status oc-go-cc.service
+journalctl --user -u oc-go-cc.service -f
+```
+
+If your config uses an environment variable for the API key:
+
+```json
+"api_key": "${OC_GO_CC_API_KEY}"
+```
+
+systemd will not read your shell startup files. Put the key in:
+
+```bash
+mkdir -p ~/.config/oc-go-cc
+chmod 700 ~/.config/oc-go-cc
+printf 'OC_GO_CC_API_KEY=sk-opencode-your-key-here\n' > ~/.config/oc-go-cc/oc-go-cc.env
+chmod 600 ~/.config/oc-go-cc/oc-go-cc.env
+```
+
+The Linux service loads it with:
+
+```ini
+EnvironmentFile=-%h/.config/oc-go-cc/oc-go-cc.env
+```
+
+By default, systemd user services start when the user logs in. To start
+`oc-go-cc` after boot before any interactive login, enable linger:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+If systemd manages the proxy, use systemd to stop it:
+
+```bash
+systemctl --user stop oc-go-cc.service
+```
+
+Running `oc-go-cc stop` may stop the current process, but systemd can restart it.
 
 ### 4. Configure Claude Code
 
