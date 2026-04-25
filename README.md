@@ -23,28 +23,9 @@ OpenCode Go gives you access to powerful open coding models for **$5/month** (th
 
 ## Installation
 
-### Homebrew (macOS & Linux)
-
-```bash
-brew tap samueltuyizere/tap
-brew install oc-go-cc
-```
-
-### Build from Source
-
-```bash
-git clone https://github.com/samueltuyizere/oc-go-cc.git
-cd oc-go-cc
-make build
-
-# Binary is at bin/oc-go-cc
-# Optionally install to $GOPATH/bin
-make install
-```
-
 ### Download a Release Binary
 
-Download the latest release for your platform from the [Releases page](https://github.com/samueltuyizere/oc-go-cc/releases):
+Download the latest release for your platform from the [Releases page](https://github.com/Hiyajomaho-num9/oc-go-cc/releases):
 
 | Platform              | File                         |
 | --------------------- | ---------------------------- |
@@ -56,11 +37,28 @@ Download the latest release for your platform from the [Releases page](https://g
 | Windows (ARM64)       | `oc-go-cc_windows-arm64.exe` |
 
 ```bash
-# Example: macOS Apple Silicon
-curl -L -o oc-go-cc https://github.com/samueltuyizere/oc-go-cc/releases/latest/download/oc-go-cc_darwin-arm64
+# Example: Linux x86_64
+curl -L -o oc-go-cc https://github.com/Hiyajomaho-num9/oc-go-cc/releases/latest/download/oc-go-cc_linux-amd64
 chmod +x oc-go-cc
 sudo mv oc-go-cc /usr/local/bin/
 ```
+
+### Build from Source
+
+```bash
+git clone https://github.com/Hiyajomaho-num9/oc-go-cc.git
+cd oc-go-cc
+make build
+
+# Binary is at bin/oc-go-cc
+# Optionally install to $GOPATH/bin
+make install
+```
+
+### Homebrew
+
+This fork does not currently publish a Homebrew tap. Use the release binaries
+or build from source if you want this fork's changes.
 
 ### Requirements
 
@@ -537,6 +535,35 @@ make install
 # Build cross-platform release binaries
 make dist
 ```
+
+## Publishing a Release
+
+Maintainers can publish a GitHub Release with prebuilt binaries:
+
+```bash
+# 1. Pick the next version.
+VERSION=v0.0.14
+
+# 2. Build all release artifacts into dist/.
+make dist
+
+# 3. Create and push the release tag.
+git tag -a "$VERSION" -m "$VERSION"
+git push origin "$VERSION"
+
+# 4. Create the GitHub Release and upload binaries.
+# If you have GitHub CLI installed:
+gh release create "$VERSION" dist/oc-go-cc_* dist/checksums.txt \
+  --title "$VERSION" \
+  --notes "Release $VERSION"
+```
+
+Alternatively, create the release in the GitHub web UI:
+
+1. Open <https://github.com/Hiyajomaho-num9/oc-go-cc/releases/new>
+2. Choose or create the tag, for example `v0.0.14`.
+3. Upload everything in `dist/`, including `checksums.txt`.
+4. Publish the release.
 
 ## License
 
