@@ -112,6 +112,29 @@ func TestDetectScenario_LongContextTakesPriority(t *testing.T) {
 	}
 }
 
+func TestRouteForStreamingUsesConfiguredLongContextThreshold(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelConfig{
+			"long_context": {
+				ContextThreshold: 1000000,
+			},
+		},
+	}
+	messages := []MessageContent{
+		{Role: "user", Content: "hello"},
+	}
+
+	result := RouteForStreaming(messages, 35000, cfg)
+	if result.Scenario == ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want non-long_context below configured threshold", result.Scenario)
+	}
+
+	result = RouteForStreaming(messages, 1000001, cfg)
+	if result.Scenario != ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want %s above configured threshold", result.Scenario, ScenarioLongContext)
+	}
+}
+
 func TestGetModelChainDeduplicatesByModelID(t *testing.T) {
 	route := RouteResult{
 		Primary: config.ModelConfig{ModelID: "deepseek-v4-pro"},
