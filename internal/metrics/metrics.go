@@ -2,6 +2,7 @@
 package metrics
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -134,11 +135,7 @@ func (s Snapshot) CalculateP95() time.Duration {
 	if len(s.Latencies) == 0 {
 		return 0
 	}
-	index := int(float64(len(s.Latencies)) * 0.95)
-	if index >= len(s.Latencies) {
-		index = len(s.Latencies) - 1
-	}
-	return s.Latencies[index]
+	return percentile(s.Latencies, 0.95)
 }
 
 // CalculateP99 calculates the p99 latency from the snapshot.
@@ -146,9 +143,19 @@ func (s Snapshot) CalculateP99() time.Duration {
 	if len(s.Latencies) == 0 {
 		return 0
 	}
-	index := int(float64(len(s.Latencies)) * 0.99)
-	if index >= len(s.Latencies) {
-		index = len(s.Latencies) - 1
+	return percentile(s.Latencies, 0.99)
+}
+
+func percentile(latencies []time.Duration, p float64) time.Duration {
+	sorted := make([]time.Duration, len(latencies))
+	copy(sorted, latencies)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i] < sorted[j]
+	})
+
+	index := int(float64(len(sorted)) * p)
+	if index >= len(sorted) {
+		index = len(sorted) - 1
 	}
-	return s.Latencies[index]
+	return sorted[index]
 }

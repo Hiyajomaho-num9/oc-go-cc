@@ -71,9 +71,10 @@ func (h *StreamHandler) ProxyStream(
 	// Use a tight loop with a line buffer - no bufio.Reader.
 	var lineBuf bytes.Buffer
 	state := &streamState{
-		textIndex:  -1,
-		toolBlocks: make(map[int]int),
-		openBlocks: make(map[int]bool),
+		textIndex:     -1,
+		thinkingIndex: -1,
+		toolBlocks:    make(map[int]int),
+		openBlocks:    make(map[int]bool),
 	}
 
 	// Read in larger chunks for efficiency, then parse lines
@@ -133,10 +134,45 @@ func (h *StreamHandler) ProxyStream(
 }
 
 type streamState struct {
-	nextIndex  int
-	textIndex  int
-	toolBlocks map[int]int
-	openBlocks map[int]bool
+	nextIndex     int
+	textIndex     int
+	thinkingIndex int
+	toolBlocks    map[int]int
+	openBlocks    map[int]bool
+}
+
+func (s *streamState) ensureThinkingBlock(w http.ResponseWriter) (int, error) {
+	if s.thinkingIndex != -1 && s.openBlocks[s.thinkingIndex] {
+		return s.thinkingIndex, nil
+	}
+
+	idx := s.nextIndex
+	s.nextIndex++
+	s.thinkingIndex = idx
+	s.openBlocks[idx] = true
+
+	startEvent := types.MessageEvent{
+		Type:         "content_block_start",
+		Index:        &idx,
+		ContentBlock: &types.ContentBlock{Type: "thinking", Thinking: ""},
+	}
+	if err := writeSSEEvent(w, startEvent); err != nil {
+		return idx, ErrClientDisconnected
+	}
+	return idx, nil
+}
+
+func (s *streamState) stopThinkingBlock(w http.ResponseWriter) error {
+	if s.thinkingIndex == -1 || !s.openBlocks[s.thinkingIndex] {
+		return nil
+	}
+	idx := s.thinkingIndex
+	if err := writeSSEEvent(w, types.MessageEvent{Type: "content_block_stop", Index: &idx}); err != nil {
+		return ErrClientDisconnected
+	}
+	delete(s.openBlocks, idx)
+	s.thinkingIndex = -1
+	return nil
 }
 
 func (s *streamState) ensureTextBlock(w http.ResponseWriter) (int, error) {
@@ -227,6 +263,7 @@ func (s *streamState) stopOpenBlocks(w http.ResponseWriter) error {
 		delete(s.openBlocks, idx)
 	}
 	s.textIndex = -1
+	s.thinkingIndex = -1
 	return nil
 }
 
@@ -269,6 +306,9 @@ func (h *StreamHandler) processSSELine(
 		content, ok := extractJSONStringValue(data, start)
 		if ok {
 			if content != "" {
+				if err := state.stopThinkingBlock(w); err != nil {
+					return err
+				}
 				blockIndex, err := state.ensureTextBlock(w)
 				if err != nil {
 					return err
@@ -333,8 +373,38 @@ func (h *StreamHandler) processSSELine(
 
 	choice := chunk.Choices[0]
 
+	// Handle DeepSeek/OpenAI-compatible reasoning deltas. Claude Code expects
+	// these to round-trip as Anthropic thinking blocks in the conversation
+	// history, otherwise DeepSeek rejects the next thinking-mode request.
+	if choice.Delta.ReasoningContent != nil && *choice.Delta.ReasoningContent != "" {
+		if err := state.stopTextBlock(w); err != nil {
+			return err
+		}
+		blockIndex, err := state.ensureThinkingBlock(w)
+		if err != nil {
+			return err
+		}
+
+		delta := types.Delta{
+			Type:     "thinking_delta",
+			Thinking: *choice.Delta.ReasoningContent,
+		}
+		event := types.MessageEvent{
+			Type:  "content_block_delta",
+			Index: &blockIndex,
+			Delta: &delta,
+		}
+		if err := writeSSEEvent(w, event); err != nil {
+			return ErrClientDisconnected
+		}
+		flusher.Flush()
+	}
+
 	// Handle text content deltas
 	if choice.Delta.Content != "" {
+		if err := state.stopThinkingBlock(w); err != nil {
+			return err
+		}
 		blockIndex, err := state.ensureTextBlock(w)
 		if err != nil {
 			return err
@@ -357,6 +427,9 @@ func (h *StreamHandler) processSSELine(
 
 	// Handle tool call deltas
 	if len(choice.Delta.ToolCalls) > 0 {
+		if err := state.stopThinkingBlock(w); err != nil {
+			return err
+		}
 		if err := state.stopTextBlock(w); err != nil {
 			return err
 		}

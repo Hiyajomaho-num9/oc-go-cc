@@ -399,29 +399,26 @@ func isClientDisconnected(r *http.Request) bool {
 // replaceModelInRawBody replaces the model field in raw JSON body with the actual model ID.
 // This is needed for Anthropic endpoint which validates the model name.
 func replaceModelInRawBody(rawBody json.RawMessage, modelID string) json.RawMessage {
-	// Simple string replacement - find "model":"..." and replace with "model":"actual-model"
-	bodyStr := string(rawBody)
-
-	// Try to find and replace the model field
-	// Pattern: "model":"claude-..." or "model":"any-model-name"
-	if idx := strings.Index(bodyStr, `"model":"`); idx != -1 {
-		start := idx + len(`"model":"`)
-		if end := strings.Index(bodyStr[start:], `"`); end != -1 {
-			oldModel := bodyStr[start : start+end]
-			// Replace the model value
-			newBody := bodyStr[:start] + modelID + bodyStr[start+end:]
-			slog.Debug("replaced model in request body",
-				"old_model", oldModel,
-				"new_model", modelID,
-				"success", true)
-			return json.RawMessage(newBody)
-		}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		slog.Warn("could not parse request body for model replacement", "error", err)
+		return rawBody
 	}
 
-	slog.Warn("could not find model field in request body, using original",
-		"body_preview", bodyStr[:min(len(bodyStr), 200)])
-	// If we couldn't parse, return original (will likely fail upstream but that's ok)
-	return rawBody
+	oldModel, _ := body["model"].(string)
+	body["model"] = modelID
+
+	updated, err := json.Marshal(body)
+	if err != nil {
+		slog.Warn("could not marshal request body after model replacement", "error", err)
+		return rawBody
+	}
+
+	slog.Debug("replaced model in request body",
+		"old_model", oldModel,
+		"new_model", modelID,
+		"success", true)
+	return json.RawMessage(updated)
 }
 
 func setStreamInRawBody(rawBody json.RawMessage, stream bool) json.RawMessage {

@@ -46,17 +46,16 @@ func hashRequest(body json.RawMessage) string {
 func (d *RequestDeduplicator) TryAcquire(body json.RawMessage) (context.Context, bool) {
 	hash := hashRequest(body)
 
-	// Check if request is already in flight
-	if _, exists := d.inFlight.Load(hash); exists {
-		d.logger.Debug("duplicate request detected, waiting", "hash", hash[:8])
-		return nil, false
-	}
-
 	// Create a cancellable context for this request
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Store the cancel function
-	d.inFlight.Store(hash, cancel)
+	// Atomically store the cancel function so concurrent identical requests
+	// cannot pass between a separate Load and Store.
+	if _, loaded := d.inFlight.LoadOrStore(hash, cancel); loaded {
+		cancel()
+		d.logger.Debug("duplicate request detected, waiting", "hash", hash[:8])
+		return nil, false
+	}
 
 	// Auto-release after window
 	go func() {

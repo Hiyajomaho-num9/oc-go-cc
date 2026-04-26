@@ -111,3 +111,27 @@ func TestDetectScenario_LongContextTakesPriority(t *testing.T) {
 		t.Errorf("Expected ScenarioLongContext, got %s", result.Scenario)
 	}
 }
+
+func TestGetModelChainDeduplicatesByModelID(t *testing.T) {
+	route := RouteResult{
+		Primary: config.ModelConfig{ModelID: "deepseek-v4-pro"},
+		Fallbacks: []config.ModelConfig{
+			{ModelID: "deepseek-v4-pro"},
+			{ModelID: "deepseek-v4-flash"},
+			{ModelID: "deepseek-v4-flash"},
+			{ModelID: "kimi-k2.6"},
+		},
+	}
+
+	chain := route.GetModelChain()
+	if got, want := len(chain), 3; got != want {
+		t.Fatalf("len(chain) = %d, want %d", got, want)
+	}
+
+	want := []string{"deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"}
+	for i, modelID := range want {
+		if got := chain[i].ModelID; got != modelID {
+			t.Fatalf("chain[%d].ModelID = %q, want %q", i, got, modelID)
+		}
+	}
+}

@@ -55,8 +55,16 @@ func (r *ModelRouter) Route(messages []MessageContent, tokenCount int) (RouteRes
 
 // GetModelChain returns the full chain of models to try (primary + fallbacks).
 func (rr *RouteResult) GetModelChain() []config.ModelConfig {
-	chain := []config.ModelConfig{rr.Primary}
-	chain = append(chain, rr.Fallbacks...)
+	seen := make(map[string]bool, len(rr.Fallbacks)+1)
+	chain := make([]config.ModelConfig, 0, len(rr.Fallbacks)+1)
+
+	for _, model := range append([]config.ModelConfig{rr.Primary}, rr.Fallbacks...) {
+		if model.ModelID == "" || seen[model.ModelID] {
+			continue
+		}
+		seen[model.ModelID] = true
+		chain = append(chain, model)
+	}
 	return chain
 }
 
