@@ -206,3 +206,112 @@ func TestTransformRequestPlacesToolResultsBeforeUserText(t *testing.T) {
 		t.Fatalf("Messages[2].Content = %q, want %q", got, want)
 	}
 }
+
+func TestTransformRequestMapsOutputConfigEffortForDeepSeek(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:        "claude-test",
+		MaxTokens:    256,
+		Thinking:     json.RawMessage(`{"type":"adaptive"}`),
+		OutputConfig: &types.OutputConfig{Effort: "max"},
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if got, want := string(openaiReq.Thinking), `{"type":"enabled"}`; got != want {
+		t.Fatalf("Thinking = %s, want %s", got, want)
+	}
+	if got, want := openaiReq.ReasoningEffort, "max"; got != want {
+		t.Fatalf("ReasoningEffort = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestUsesConfiguredReasoningEffortForDeepSeek(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:        "claude-test",
+		MaxTokens:    256,
+		OutputConfig: &types.OutputConfig{Effort: "high"},
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{
+		ModelID:         "deepseek-v4-flash",
+		ReasoningEffort: "xhigh",
+	})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if got, want := openaiReq.ReasoningEffort, "max"; got != want {
+		t.Fatalf("ReasoningEffort = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestUsesEnvReasoningEffortForDeepSeek(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "max")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if got, want := openaiReq.ReasoningEffort, "max"; got != want {
+		t.Fatalf("ReasoningEffort = %q, want %q", got, want)
+	}
+	if len(openaiReq.Thinking) == 0 {
+		t.Fatal("Thinking is empty, want enabled thinking when env effort is set")
+	}
+}
+
+func TestTransformRequestDoesNotApplyDeepSeekReasoningToOtherModels(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "max")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "max")
+
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:        "claude-test",
+		MaxTokens:    256,
+		Thinking:     json.RawMessage(`{"type":"adaptive"}`),
+		OutputConfig: &types.OutputConfig{Effort: "max"},
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "kimi-k2.6"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if len(openaiReq.Thinking) != 0 {
+		t.Fatalf("Thinking = %s, want empty for non-DeepSeek model", string(openaiReq.Thinking))
+	}
+	if openaiReq.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want empty for non-DeepSeek model", openaiReq.ReasoningEffort)
+	}
+}

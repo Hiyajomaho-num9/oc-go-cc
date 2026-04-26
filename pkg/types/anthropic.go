@@ -11,15 +11,17 @@ import (
 
 // MessageRequest represents a request to the Anthropic Messages API.
 type MessageRequest struct {
-	Model       string          `json:"model"`
-	MaxTokens   int             `json:"max_tokens"`
-	System      json.RawMessage `json:"system,omitempty"`
-	Messages    []Message       `json:"messages"`
-	Stream      *bool           `json:"stream,omitempty"`
-	Tools       []Tool          `json:"tools,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	Metadata    *Metadata       `json:"metadata,omitempty"`
+	Model        string          `json:"model"`
+	MaxTokens    int             `json:"max_tokens"`
+	System       json.RawMessage `json:"system,omitempty"`
+	Messages     []Message       `json:"messages"`
+	Stream       *bool           `json:"stream,omitempty"`
+	Tools        []Tool          `json:"tools,omitempty"`
+	Temperature  *float64        `json:"temperature,omitempty"`
+	TopP         *float64        `json:"top_p,omitempty"`
+	Metadata     *Metadata       `json:"metadata,omitempty"`
+	Thinking     json.RawMessage `json:"thinking,omitempty"`
+	OutputConfig *OutputConfig   `json:"output_config,omitempty"`
 }
 
 // SystemText extracts the system prompt text from the raw system field.
@@ -65,6 +67,11 @@ type CacheControl struct {
 // Metadata contains optional metadata for the request.
 type Metadata struct {
 	UserID string `json:"user_id,omitempty"`
+}
+
+// OutputConfig contains Claude Code output controls such as effort level.
+type OutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // Message represents a single message in the conversation.

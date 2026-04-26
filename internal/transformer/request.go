@@ -5,6 +5,8 @@ package transformer
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"oc-go-cc/internal/config"
 	"oc-go-cc/pkg/types"
@@ -64,7 +66,80 @@ func (t *RequestTransformer) TransformRequest(
 		openaiReq.Tools = t.transformTools(anthropicReq.Tools)
 	}
 
+	t.applyDeepSeekReasoningOptions(openaiReq, anthropicReq, model)
+
 	return openaiReq, nil
+}
+
+// applyDeepSeekReasoningOptions maps Claude/Anthropic effort controls to
+// DeepSeek's OpenAI-compatible thinking fields.
+func (t *RequestTransformer) applyDeepSeekReasoningOptions(
+	openaiReq *types.ChatCompletionRequest,
+	anthropicReq *types.MessageRequest,
+	model config.ModelConfig,
+) {
+	if !isDeepSeekModel(model.ModelID) {
+		return
+	}
+
+	effort := resolveDeepSeekReasoningEffort(anthropicReq, model)
+	if effort == "" && !isThinkingEnabled(anthropicReq.Thinking) {
+		return
+	}
+
+	openaiReq.Thinking = json.RawMessage(`{"type":"enabled"}`)
+	if effort != "" {
+		openaiReq.ReasoningEffort = effort
+	}
+}
+
+func isDeepSeekModel(modelID string) bool {
+	return strings.HasPrefix(strings.ToLower(modelID), "deepseek-")
+}
+
+func resolveDeepSeekReasoningEffort(anthropicReq *types.MessageRequest, model config.ModelConfig) string {
+	candidates := []string{
+		model.ReasoningEffort,
+	}
+	if anthropicReq.OutputConfig != nil {
+		candidates = append(candidates, anthropicReq.OutputConfig.Effort)
+	}
+	candidates = append(candidates,
+		os.Getenv("OC_GO_CC_REASONING_EFFORT"),
+		os.Getenv("CLAUDE_CODE_EFFORT_LEVEL"),
+	)
+
+	for _, candidate := range candidates {
+		if effort := normalizeDeepSeekReasoningEffort(candidate); effort != "" {
+			return effort
+		}
+	}
+	return ""
+}
+
+func normalizeDeepSeekReasoningEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "max", "xhigh":
+		return "max"
+	case "high", "medium", "low":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func isThinkingEnabled(raw json.RawMessage) bool {
+	if strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return false
+	}
+
+	var cfg struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return true
+	}
+	return strings.ToLower(cfg.Type) != "disabled"
 }
 
 // transformMessages converts Anthropic messages to OpenAI format.

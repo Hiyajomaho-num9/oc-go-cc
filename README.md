@@ -242,7 +242,8 @@ That's it. Claude Code will now route all requests through oc-go-cc to OpenCode 
 | `content: [{"type":"text","text":"..."}]`                    | `content: "..."`                        |
 | `tool_use` content blocks                                    | `tool_calls` array                      |
 | `tool_result` content blocks                                 | `role: "tool"` messages                 |
-| `thinking` content blocks                                    | Skipped (no equivalent)                 |
+| `thinking` content blocks                                    | `reasoning_content`                     |
+| `output_config.effort` for DeepSeek models                   | `reasoning_effort` plus enabled thinking |
 | `stop_reason: "end_turn"`                                    | `finish_reason: "stop"`                 |
 | `stop_reason: "tool_use"`                                    | `finish_reason: "tool_calls"`           |
 | SSE `message_start` / `content_block_delta` / `message_stop` | SSE `role` / `delta.content` / `[DONE]` |
@@ -324,6 +325,15 @@ Environment variables override config file values. Config values also support `$
 | `OC_GO_CC_PORT`         | Proxy listen port                           | `3456`                                           |
 | `OC_GO_CC_OPENCODE_URL` | OpenCode Go API endpoint                    | `https://opencode.ai/zen/go/v1/chat/completions` |
 | `OC_GO_CC_LOG_LEVEL`    | Log level: `debug`, `info`, `warn`, `error` | `info`                                           |
+| `OC_GO_CC_REASONING_EFFORT` | DeepSeek reasoning effort override: `high` or `max` | —                                           |
+
+For DeepSeek OpenAI-compatible models (`deepseek-*`), oc-go-cc maps Claude
+Code's `output_config.effort` / `CLAUDE_CODE_EFFORT_LEVEL` to DeepSeek's
+`reasoning_effort`. You can force max reasoning for the proxy process with:
+
+```bash
+export OC_GO_CC_REASONING_EFFORT=max
+```
 
 ### Model Routing
 

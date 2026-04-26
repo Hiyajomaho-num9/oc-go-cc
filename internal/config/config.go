@@ -19,6 +19,7 @@ type ModelConfig struct {
 	Temperature      float64 `json:"temperature"`
 	MaxTokens        int     `json:"max_tokens"`
 	ContextThreshold int     `json:"context_threshold"`
+	ReasoningEffort  string  `json:"reasoning_effort,omitempty"`
 }
 
 // OpenCodeGoConfig holds the upstream OpenCode Go API settings.
