@@ -60,6 +60,32 @@ func TestTransformRequestPreservesThinkingAsReasoningContent(t *testing.T) {
 	}
 }
 
+func TestTransformRequestIncludesStreamUsageOptions(t *testing.T) {
+	transformer := NewRequestTransformer()
+	stream := true
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Stream:    &stream,
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if openaiReq.StreamOptions == nil {
+		t.Fatal("StreamOptions = nil, want include_usage enabled")
+	}
+	if !openaiReq.StreamOptions.IncludeUsage {
+		t.Fatal("StreamOptions.IncludeUsage = false, want true")
+	}
+}
+
 func TestTransformRequestIncludesEmptyReasoningContentForToolCalls(t *testing.T) {
 	transformer := NewRequestTransformer()
 
@@ -87,6 +113,123 @@ func TestTransformRequestIncludesEmptyReasoningContentForToolCalls(t *testing.T)
 	}
 	if got, want := *msg.ReasoningContent, " "; got != want {
 		t.Fatalf("ReasoningContent = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestIncludesPlaceholderReasoningForDeepSeekToolCalls(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Messages: []types.Message{
+			{
+				Role: "assistant",
+				Content: json.RawMessage(`[
+					{"type":"tool_use","id":"toolu_789","name":"read_file","input":{"path":"README.md"}}
+				]`),
+			},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	msg := openaiReq.Messages[0]
+	if msg.ReasoningContent == nil {
+		t.Fatal("ReasoningContent = nil, want non-nil placeholder for DeepSeek tool call")
+	}
+	if got, want := *msg.ReasoningContent, " "; got != want {
+		t.Fatalf("ReasoningContent = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestIncludesPlaceholderReasoningForDeepSeekThinkingTextAssistant(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "max")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Messages: []types.Message{
+			{
+				Role:    "assistant",
+				Content: json.RawMessage(`[{"type":"text","text":"I checked the build log."}]`),
+			},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	msg := openaiReq.Messages[0]
+	if msg.ReasoningContent == nil {
+		t.Fatal("ReasoningContent = nil, want non-nil placeholder for DeepSeek thinking history")
+	}
+	if got, want := *msg.ReasoningContent, " "; got != want {
+		t.Fatalf("ReasoningContent = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestDoesNotAddPlaceholderReasoningForDeepSeekTextAssistantWithoutThinking(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+
+	transformer := NewRequestTransformer()
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Messages: []types.Message{
+			{
+				Role:    "assistant",
+				Content: json.RawMessage(`[{"type":"text","text":"Plain assistant answer."}]`),
+			},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if got := openaiReq.Messages[0].ReasoningContent; got != nil {
+		t.Fatalf("ReasoningContent = %q, want nil without DeepSeek thinking mode", *got)
+	}
+}
+
+func TestTransformRequestDoesNotAddPlaceholderReasoningForGenericToolCalls(t *testing.T) {
+	transformer := NewRequestTransformer()
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Messages: []types.Message{
+			{
+				Role: "assistant",
+				Content: json.RawMessage(`[
+					{"type":"tool_use","id":"toolu_generic","name":"search","input":{"query":"docs"}}
+				]`),
+			},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "qwen3.6-plus"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if got := openaiReq.Messages[0].ReasoningContent; got != nil {
+		t.Fatalf("ReasoningContent = %q, want nil for generic model", *got)
 	}
 }
 

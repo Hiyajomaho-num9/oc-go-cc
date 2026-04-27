@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +102,20 @@ func NewMessagesHandler(
 	}
 }
 
+func (h *MessagesHandler) streamingAttemptTimeout() time.Duration {
+	timeoutMs := 0
+	if h != nil && h.config != nil {
+		timeoutMs = h.config.OpenCodeGo.StreamTimeoutMs
+		if timeoutMs <= 0 {
+			timeoutMs = h.config.OpenCodeGo.TimeoutMs
+		}
+	}
+	if timeoutMs <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(timeoutMs) * time.Millisecond
+}
+
 // HandleMessages handles POST /v1/messages.
 func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -137,6 +150,7 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 	if _, ok := h.requestDedup.TryAcquire(rawBody); !ok {
 		h.metrics.RecordDeduplicated()
 		h.logger.Info("duplicate request skipped", "request_id", requestID)
+		h.sendError(w, http.StatusConflict, "duplicate request skipped", nil)
 		return
 	}
 
@@ -180,12 +194,15 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		routerMessages = append(routerMessages, mc)
 		tokenMessages = append(tokenMessages, token.MessageContent{
 			Role:    msg.Role,
-			Content: content,
+			Content: extractTokenTextFromBlocks(blocks),
 		})
 	}
 
 	// Count tokens.
-	tokenCount, err := h.tokenCounter.CountMessages(systemText, tokenMessages)
+	tokenCount, err := h.tokenCounter.CountMessages(
+		systemAndToolsTokenText(systemText, anthropicReq.Tools),
+		tokenMessages,
+	)
 	if err != nil {
 		h.logger.Warn("failed to count tokens", "error", err)
 		tokenCount = 0
@@ -275,6 +292,7 @@ func (h *MessagesHandler) handleStreaming(
 	defer close(heartbeatDone)
 
 	streamStart := time.Now()
+	attemptTimeout := h.streamingAttemptTimeout()
 
 	for _, model := range modelChain {
 		// Check if client already disconnected before trying this model
@@ -285,34 +303,17 @@ func (h *MessagesHandler) handleStreaming(
 		default:
 		}
 
-		h.logger.Info("attempting streaming model", "model", model.ModelID)
+		h.logger.Info("attempting streaming model", "model", model.ModelID, "timeout", attemptTimeout)
 
-		// Create a fresh context with timeout for THIS attempt only.
-		// Don't use r.Context() directly - it gets canceled when Claude Code retries.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// Create a fresh timeout context for THIS attempt only, but keep it tied
+		// to the client context so upstream work stops when Claude Code disconnects.
+		ctx, cancel := context.WithTimeout(clientCtx, attemptTimeout)
 
-		// Check if this is an Anthropic-native model (MiniMax)
+		// Check if this is an Anthropic-native model.
 		if client.IsAnthropicModel(model.ModelID) {
-			// For MiniMax models, send raw Anthropic request to Anthropic endpoint
-			// But we need to replace the model name in the raw body
+			// Send raw Anthropic request to the Anthropic endpoint, but replace
+			// the requested model with the routed model first.
 			modelBody := replaceModelInRawBody(rawBody, model.ModelID)
-			if strings.HasPrefix(model.ModelID, "deepseek-") {
-				modelBody = setStreamInRawBody(modelBody, false)
-				if err := h.handleAnthropicPseudoStreaming(ctx, rw, modelBody, model.ModelID); err != nil {
-					cancel()
-					if clientCtx.Err() == context.Canceled {
-						h.logger.Info("client disconnected during anthropic pseudo stream")
-						return
-					}
-					h.logger.Warn("anthropic pseudo streaming failed", "model", model.ModelID, "error", err)
-					continue
-				}
-				cancel()
-				latency := time.Since(streamStart)
-				h.metrics.RecordSuccess(model.ModelID, latency)
-				h.logger.Info("streaming completed", "model", model.ModelID, "latency", latency)
-				return
-			}
 			if err := h.handleAnthropicStreaming(ctx, rw, modelBody, model.ModelID); err != nil {
 				cancel()
 				// Check if this was a client disconnect
@@ -353,7 +354,7 @@ func (h *MessagesHandler) handleStreaming(
 
 		// Proxy the stream: transform OpenAI SSE → Anthropic SSE in real-time
 		if err := h.streamHandler.ProxyStream(rw, streamBody, model.ModelID, clientCtx); err != nil {
-			streamBody.Close()
+			_ = streamBody.Close()
 			cancel()
 			if err == transformer.ErrClientDisconnected {
 				h.logger.Info("client disconnected during stream")
@@ -368,7 +369,7 @@ func (h *MessagesHandler) handleStreaming(
 			continue
 		}
 
-		streamBody.Close()
+		_ = streamBody.Close()
 		cancel()
 		latency := time.Since(streamStart)
 		h.metrics.RecordSuccess(model.ModelID, latency)
@@ -383,16 +384,6 @@ func (h *MessagesHandler) handleStreaming(
 	} else {
 		// Headers already sent - send error as SSE event
 		h.sendStreamError(rw, "all upstream models failed")
-	}
-}
-
-// isClientDisconnected checks if the HTTP client has disconnected.
-func isClientDisconnected(r *http.Request) bool {
-	select {
-	case <-r.Context().Done():
-		return true
-	default:
-		return false
 	}
 }
 
@@ -421,19 +412,6 @@ func replaceModelInRawBody(rawBody json.RawMessage, modelID string) json.RawMess
 	return json.RawMessage(updated)
 }
 
-func setStreamInRawBody(rawBody json.RawMessage, stream bool) json.RawMessage {
-	var body map[string]interface{}
-	if err := json.Unmarshal(rawBody, &body); err != nil {
-		return rawBody
-	}
-	body["stream"] = stream
-	updated, err := json.Marshal(body)
-	if err != nil {
-		return rawBody
-	}
-	return json.RawMessage(updated)
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -459,7 +437,7 @@ func (h *MessagesHandler) handleAnthropicStreaming(
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Copy the response directly (already in Anthropic format)
 	// SSE headers already set by handleStreaming
@@ -476,106 +454,6 @@ func (h *MessagesHandler) handleAnthropicStreaming(
 	return nil
 }
 
-// handleAnthropicPseudoStreaming executes a non-streaming Anthropic-native request and
-// wraps the completed response as Anthropic SSE. Some providers advertise an
-// Anthropic endpoint but do not emit Anthropic-compatible SSE for streaming.
-func (h *MessagesHandler) handleAnthropicPseudoStreaming(
-	ctx context.Context,
-	w http.ResponseWriter,
-	rawBody json.RawMessage,
-	modelID string,
-) error {
-	body, err := h.executeAnthropicRawRequest(ctx, rawBody)
-	if err != nil {
-		return err
-	}
-
-	var msg types.MessageResponse
-	if err := json.Unmarshal(body, &msg); err != nil {
-		return fmt.Errorf("failed to parse anthropic response: %w", err)
-	}
-	if msg.ID == "" {
-		msg.ID = "msg_" + fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	if msg.Type == "" {
-		msg.Type = "message"
-	}
-	if msg.Role == "" {
-		msg.Role = "assistant"
-	}
-	msg.Model = modelID
-
-	flusher, _ := w.(http.Flusher)
-	startMsg := msg
-	startMsg.Content = []types.ContentBlock{}
-	startMsg.StopReason = ""
-	startMsg.StopSequence = ""
-	startMsg.Usage = types.Usage{}
-	if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "message_start", Message: &startMsg}); err != nil {
-		return err
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	for i, block := range msg.Content {
-		idx := i
-		switch block.Type {
-		case "text":
-			if err := writeAnthropicSSEEvent(w, types.MessageEvent{
-				Type:         "content_block_start",
-				Index:        &idx,
-				ContentBlock: &types.ContentBlock{Type: "text", Text: ""},
-			}); err != nil {
-				return err
-			}
-			if block.Text != "" {
-				if err := writeAnthropicSSEEvent(w, types.MessageEvent{
-					Type:  "content_block_delta",
-					Index: &idx,
-					Delta: &types.Delta{Type: "text_delta", Text: block.Text},
-				}); err != nil {
-					return err
-				}
-			}
-			if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "content_block_stop", Index: &idx}); err != nil {
-				return err
-			}
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-
-	stopReason := msg.StopReason
-	if stopReason == "" {
-		stopReason = "end_turn"
-	}
-	if err := writeAnthropicSSEEvent(w, types.MessageEvent{
-		Type:  "message_delta",
-		Delta: &types.Delta{StopReason: stopReason},
-		Usage: &msg.Usage,
-	}); err != nil {
-		return err
-	}
-	if err := writeAnthropicSSEEvent(w, types.MessageEvent{Type: "message_stop"}); err != nil {
-		return err
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-	return nil
-}
-
-func writeAnthropicSSEEvent(w http.ResponseWriter, event types.MessageEvent) error {
-	data, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %w", err)
-	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, string(data))
-	return err
-}
-
 // sendStreamError sends an error event in the SSE stream.
 // Use this when headers have already been written.
 func (h *MessagesHandler) sendStreamError(w http.ResponseWriter, message string) {
@@ -590,7 +468,7 @@ func (h *MessagesHandler) sendStreamError(w http.ResponseWriter, message string)
 	}
 
 	data, _ := json.Marshal(errorEvent)
-	fmt.Fprintf(w, "event: error\ndata: %s\n\n", string(data))
+	_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", string(data))
 
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -612,7 +490,7 @@ func (h *MessagesHandler) handleNonStreaming(
 		ctx,
 		modelChain,
 		func(ctx context.Context, model config.ModelConfig) ([]byte, error) {
-			// Check if this is an Anthropic-native model (MiniMax)
+			// Check if this is an Anthropic-native model.
 			if client.IsAnthropicModel(model.ModelID) {
 				return h.executeAnthropicRequest(ctx, rawBody, model)
 			}
@@ -638,10 +516,10 @@ func (h *MessagesHandler) handleNonStreaming(
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(responseBody)
+	_, _ = w.Write(responseBody)
 }
 
-// executeAnthropicRequest executes a request to the Anthropic endpoint (for MiniMax models).
+// executeAnthropicRequest executes a request to the Anthropic endpoint.
 func (h *MessagesHandler) executeAnthropicRequest(
 	ctx context.Context,
 	rawBody json.RawMessage,
@@ -660,7 +538,7 @@ func (h *MessagesHandler) executeAnthropicRawRequest(
 	if err != nil {
 		return nil, fmt.Errorf("anthropic request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read the response (already in Anthropic format)
 	body, err := io.ReadAll(resp.Body)
@@ -746,5 +624,5 @@ func (h *MessagesHandler) sendError(w http.ResponseWriter, statusCode int, messa
 	w.WriteHeader(statusCode)
 
 	errorResp := transformer.TransformErrorResponse(statusCode, message)
-	json.NewEncoder(w).Encode(errorResp)
+	_ = json.NewEncoder(w).Encode(errorResp)
 }

@@ -71,7 +71,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		Addr:         addr,
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 5 * time.Minute,
+		WriteTimeout: 0, // SSE streams are bounded by per-attempt upstream timeouts instead.
 		IdleTimeout:  120 * time.Second,
 	}
 

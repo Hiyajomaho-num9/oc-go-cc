@@ -112,7 +112,9 @@ func (h *StreamHandler) ProxyStream(
 			// Process any remaining data in buffer
 			if lineBuf.Len() > 0 {
 				line := lineBuf.String()
-				h.processSSELine(w, flusher, line, state, originalModel)
+				if err := h.processSSELine(w, flusher, line, state, originalModel); err != nil {
+					return err
+				}
 			}
 			break
 		}
@@ -298,43 +300,49 @@ func (h *StreamHandler) processSSELine(
 		return nil
 	}
 
-	// Fast path: check if this is a content chunk without full JSON parsing
-	// Look for "delta":{"content":" pattern
-	if idx := strings.Index(data, `"delta":{"content":"`); idx != -1 {
-		// Extract content directly
-		start := idx + len(`"delta":{"content":"`)
-		content, ok := extractJSONStringValue(data, start)
-		if ok {
-			if content != "" {
-				if err := state.stopThinkingBlock(w); err != nil {
-					return err
-				}
-				blockIndex, err := state.ensureTextBlock(w)
-				if err != nil {
-					return err
-				}
+	// Fast path: check if this is a content chunk without full JSON parsing.
+	// Skip the fast path when reasoning_content is present in the same chunk so
+	// the JSON path can preserve both reasoning and text deltas.
+	if !strings.Contains(data, `"reasoning_content"`) {
+		if idx := strings.Index(data, `"delta":{"content":"`); idx != -1 {
+			// Extract content directly
+			start := idx + len(`"delta":{"content":"`)
+			content, ok := extractJSONStringValue(data, start)
+			if ok {
+				if content != "" {
+					if err := state.stopThinkingBlock(w); err != nil {
+						return err
+					}
+					blockIndex, err := state.ensureTextBlock(w)
+					if err != nil {
+						return err
+					}
 
-				// Send content_block_delta
-				delta := types.Delta{
-					Type: "text_delta",
-					Text: content,
+					// Send content_block_delta
+					delta := types.Delta{
+						Type: "text_delta",
+						Text: content,
+					}
+					event := types.MessageEvent{
+						Type:  "content_block_delta",
+						Index: &blockIndex,
+						Delta: &delta,
+					}
+					if err := writeSSEEvent(w, event); err != nil {
+						return ErrClientDisconnected
+					}
+					flusher.Flush()
+					return nil
 				}
-				event := types.MessageEvent{
-					Type:  "content_block_delta",
-					Index: &blockIndex,
-					Delta: &delta,
-				}
-				if err := writeSSEEvent(w, event); err != nil {
-					return ErrClientDisconnected
-				}
-				flusher.Flush()
-				return nil
 			}
 		}
 	}
 
-	// Check for finish_reason - need to send stop events
-	if strings.Contains(data, `"finish_reason":`) && !strings.Contains(data, `"finish_reason":null`) {
+	// Check for finish_reason - need to send stop events. If the chunk also has
+	// usage, fall through to full JSON parsing so usage is preserved.
+	if strings.Contains(data, `"finish_reason":`) &&
+		!strings.Contains(data, `"finish_reason":null`) &&
+		!strings.Contains(data, `"usage":`) {
 		if err := state.stopOpenBlocks(w); err != nil {
 			return err
 		}
@@ -361,6 +369,10 @@ func (h *StreamHandler) processSSELine(
 	}
 
 	// For tool calls and other complex cases, fall back to full JSON parsing
+	if upstreamErr := parseStreamError(data); upstreamErr != nil {
+		return upstreamErr
+	}
+
 	var chunk types.ChatCompletionChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		// Skip malformed chunks - don't fail the whole stream
@@ -368,6 +380,11 @@ func (h *StreamHandler) processSSELine(
 	}
 
 	if len(chunk.Choices) == 0 {
+		if chunk.Usage != nil {
+			if err := h.sendUsageDelta(w, flusher, chunk.Usage); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -467,22 +484,12 @@ func (h *StreamHandler) processSSELine(
 			return err
 		}
 
-		var usage *types.Usage
-		if chunk.Usage != nil {
-			usage = &types.Usage{
-				InputTokens:              chunk.Usage.PromptTokens,
-				OutputTokens:             chunk.Usage.CompletionTokens,
-				CacheCreationInputTokens: chunk.Usage.PromptCacheMissTokens,
-				CacheReadInputTokens:     chunk.Usage.PromptCacheHitTokens,
-			}
-		}
-
 		msgDelta := types.MessageEvent{
 			Type: "message_delta",
 			Delta: &types.Delta{
 				StopReason: h.responseTransformer.mapFinishReason(choice.FinishReason),
 			},
-			Usage: usage,
+			Usage: usageInfoToAnthropic(chunk.Usage),
 		}
 		if err := writeSSEEvent(w, msgDelta); err != nil {
 			return ErrClientDisconnected
@@ -491,6 +498,55 @@ func (h *StreamHandler) processSSELine(
 	}
 
 	return nil
+}
+
+func parseStreamError(data string) error {
+	var envelope struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(data), &envelope); err != nil || envelope.Error == nil {
+		return nil
+	}
+
+	message := envelope.Error.Message
+	if message == "" {
+		message = "upstream stream error"
+	}
+	if envelope.Error.Code != "" {
+		return fmt.Errorf("upstream stream error: %s: %s", envelope.Error.Code, message)
+	}
+	if envelope.Error.Type != "" {
+		return fmt.Errorf("upstream stream error: %s: %s", envelope.Error.Type, message)
+	}
+	return fmt.Errorf("upstream stream error: %s", message)
+}
+
+func (h *StreamHandler) sendUsageDelta(w http.ResponseWriter, flusher http.Flusher, usage *types.UsageInfo) error {
+	event := types.MessageEvent{
+		Type:  "message_delta",
+		Usage: usageInfoToAnthropic(usage),
+	}
+	if err := writeSSEEvent(w, event); err != nil {
+		return ErrClientDisconnected
+	}
+	flusher.Flush()
+	return nil
+}
+
+func usageInfoToAnthropic(usage *types.UsageInfo) *types.Usage {
+	if usage == nil {
+		return nil
+	}
+	return &types.Usage{
+		InputTokens:              usage.PromptTokens,
+		OutputTokens:             usage.CompletionTokens,
+		CacheCreationInputTokens: usage.PromptCacheMissTokens,
+		CacheReadInputTokens:     usage.PromptCacheHitTokens,
+	}
 }
 
 func extractJSONStringValue(data string, start int) (string, bool) {

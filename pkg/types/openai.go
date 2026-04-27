@@ -19,6 +19,12 @@ type ChatCompletionRequest struct {
 	Stop            interface{}     `json:"stop,omitempty"`
 	Thinking        json.RawMessage `json:"thinking,omitempty"`
 	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	StreamOptions   *StreamOptions  `json:"stream_options,omitempty"`
+}
+
+// StreamOptions controls streaming response metadata from OpenAI-compatible APIs.
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 // ChatMessage represents a single message in the conversation.

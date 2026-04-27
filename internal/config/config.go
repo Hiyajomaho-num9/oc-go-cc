@@ -27,6 +27,7 @@ type OpenCodeGoConfig struct {
 	BaseURL          string `json:"base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
 	TimeoutMs        int    `json:"timeout_ms"`
+	StreamTimeoutMs  int    `json:"stream_timeout_ms"`
 }
 
 // LoggingConfig controls application logging behavior.

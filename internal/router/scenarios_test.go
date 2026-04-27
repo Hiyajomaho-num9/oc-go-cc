@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"oc-go-cc/internal/config"
@@ -112,10 +113,30 @@ func TestDetectScenario_LongContextTakesPriority(t *testing.T) {
 	}
 }
 
+func TestDetectScenarioReasonUsesConfiguredModelName(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelConfig{
+			"complex": {ModelID: "deepseek-v4-pro"},
+			"default": {ModelID: "deepseek-v4-flash"},
+		},
+	}
+
+	result := DetectScenario([]MessageContent{{Role: "user", Content: "Refactor this service"}}, 100, cfg)
+	if !strings.Contains(result.Reason, "deepseek-v4-pro") {
+		t.Fatalf("complex reason = %q, want configured model name", result.Reason)
+	}
+
+	result = DetectScenario([]MessageContent{{Role: "user", Content: "hello"}}, 100, cfg)
+	if !strings.Contains(result.Reason, "deepseek-v4-flash") {
+		t.Fatalf("default reason = %q, want configured model name", result.Reason)
+	}
+}
+
 func TestRouteForStreamingUsesConfiguredLongContextThreshold(t *testing.T) {
 	cfg := &config.Config{
 		Models: map[string]config.ModelConfig{
 			"long_context": {
+				ModelID:          "deepseek-v4-pro",
 				ContextThreshold: 1000000,
 			},
 		},
@@ -132,6 +153,41 @@ func TestRouteForStreamingUsesConfiguredLongContextThreshold(t *testing.T) {
 	result = RouteForStreaming(messages, 1000001, cfg)
 	if result.Scenario != ScenarioLongContext {
 		t.Fatalf("RouteForStreaming() = %s, want %s above configured threshold", result.Scenario, ScenarioLongContext)
+	}
+	if !strings.Contains(result.Reason, "deepseek-v4-pro") {
+		t.Fatalf("RouteForStreaming() reason = %q, want configured model name", result.Reason)
+	}
+}
+
+func TestRouteForStreamingUsesDefaultLongContextThreshold(t *testing.T) {
+	messages := []MessageContent{
+		{Role: "user", Content: "hello"},
+	}
+
+	result := RouteForStreaming(messages, 90000, &config.Config{Models: map[string]config.ModelConfig{}})
+	if result.Scenario == ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want non-long_context below default threshold", result.Scenario)
+	}
+
+	result = RouteForStreaming(messages, 100001, &config.Config{Models: map[string]config.ModelConfig{}})
+	if result.Scenario != ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want %s above default threshold", result.Scenario, ScenarioLongContext)
+	}
+}
+
+func TestRouteForStreamingHandlesNilConfig(t *testing.T) {
+	messages := []MessageContent{
+		{Role: "user", Content: "hello"},
+	}
+
+	result := RouteForStreaming(messages, 90000, nil)
+	if result.Scenario == ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want non-long_context below default threshold with nil config", result.Scenario)
+	}
+
+	result = RouteForStreaming(messages, 100001, nil)
+	if result.Scenario != ScenarioLongContext {
+		t.Fatalf("RouteForStreaming() = %s, want %s above default threshold with nil config", result.Scenario, ScenarioLongContext)
 	}
 }
 

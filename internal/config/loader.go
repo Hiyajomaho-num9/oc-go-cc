@@ -112,6 +112,11 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("OC_GO_CC_OPENCODE_URL"); v != "" {
 		cfg.OpenCodeGo.BaseURL = v
 	}
+	if v := os.Getenv("OC_GO_CC_STREAM_TIMEOUT_MS"); v != "" {
+		if timeoutMs, err := strconv.Atoi(v); err == nil {
+			cfg.OpenCodeGo.StreamTimeoutMs = timeoutMs
+		}
+	}
 	if v := os.Getenv("OC_GO_CC_LOG_LEVEL"); v != "" {
 		cfg.Logging.Level = v
 	}
@@ -133,6 +138,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.OpenCodeGo.TimeoutMs == 0 {
 		cfg.OpenCodeGo.TimeoutMs = defaultTimeoutMs
+	}
+	if cfg.OpenCodeGo.StreamTimeoutMs == 0 {
+		cfg.OpenCodeGo.StreamTimeoutMs = cfg.OpenCodeGo.TimeoutMs
 	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = defaultLogLevel

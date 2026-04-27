@@ -45,10 +45,11 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 	// 1. Check for long context first (most important)
 	threshold := getLongContextThreshold(cfg)
 	if tokenCount > threshold {
+		model := scenarioModelName(cfg, ScenarioLongContext)
 		return ScenarioResult{
 			Scenario:   ScenarioLongContext,
 			TokenCount: tokenCount,
-			Reason:     fmt.Sprintf("token count %d exceeds threshold %d (use MiniMax for 1M context)", tokenCount, threshold),
+			Reason:     fmt.Sprintf("token count %d exceeds threshold %d (use %s for long context)", tokenCount, threshold, model),
 		}
 	}
 
@@ -57,7 +58,7 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 		return ScenarioResult{
 			Scenario:   ScenarioComplex,
 			TokenCount: tokenCount,
-			Reason:     "complex or tool-based operation detected (use GLM-5.1)",
+			Reason:     fmt.Sprintf("complex or tool-based operation detected (use %s)", scenarioModelName(cfg, ScenarioComplex)),
 		}
 	}
 
@@ -66,7 +67,7 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 		return ScenarioResult{
 			Scenario:   ScenarioThink,
 			TokenCount: tokenCount,
-			Reason:     "thinking/reasoning pattern detected (use GLM-5)",
+			Reason:     fmt.Sprintf("thinking/reasoning pattern detected (use %s)", scenarioModelName(cfg, ScenarioThink)),
 		}
 	}
 
@@ -75,7 +76,7 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 		return ScenarioResult{
 			Scenario:   ScenarioBackground,
 			TokenCount: tokenCount,
-			Reason:     "simple background task detected (use Qwen3.5 Plus)",
+			Reason:     fmt.Sprintf("simple background task detected (use %s)", scenarioModelName(cfg, ScenarioBackground)),
 		}
 	}
 
@@ -83,7 +84,7 @@ func DetectScenario(messages []MessageContent, tokenCount int, cfg *config.Confi
 	return ScenarioResult{
 		Scenario:   ScenarioDefault,
 		TokenCount: tokenCount,
-		Reason:     "default scenario (use Kimi K2.6)",
+		Reason:     fmt.Sprintf("default scenario (use %s)", scenarioModelName(cfg, ScenarioDefault)),
 	}
 }
 
@@ -180,12 +181,23 @@ func hasBackgroundPattern(messages []MessageContent) bool {
 }
 
 // getLongContextThreshold returns the configured threshold or a sensible default.
-// Default is 60K tokens to trigger MiniMax (1M context) vs regular models (128-256K).
+// Default is 100K tokens to trigger long-context models (1M context) vs regular models (128-256K).
 func getLongContextThreshold(cfg *config.Config) int {
-	if lc, ok := cfg.Models["long_context"]; ok && lc.ContextThreshold > 0 {
-		return lc.ContextThreshold
+	if cfg != nil {
+		if lc, ok := cfg.Models["long_context"]; ok && lc.ContextThreshold > 0 {
+			return lc.ContextThreshold
+		}
 	}
-	return 60000 // Default: 60K tokens
+	return 100000 // Default: 100K tokens
+}
+
+func scenarioModelName(cfg *config.Config, scenario Scenario) string {
+	if cfg != nil {
+		if model, ok := cfg.Models[string(scenario)]; ok && model.ModelID != "" {
+			return model.ModelID
+		}
+	}
+	return string(scenario)
 }
 
 // RouteForStreaming selects a model optimized for streaming latency.
@@ -193,25 +205,25 @@ func getLongContextThreshold(cfg *config.Config) int {
 // This may return a less capable model but one that streams faster.
 func RouteForStreaming(messages []MessageContent, tokenCount int, cfg *config.Config) ScenarioResult {
 	// For streaming, use simpler models that have better TTFT
-	// Complex models (GLM, Kimi) are too slow for streaming with many tools
+	// Complex models can be too slow for streaming with many tools.
 
 	threshold := getLongContextThreshold(cfg)
 	if tokenCount > threshold {
-		// High token count - use MiniMax for streaming (supports 1M context, decent TTFT)
+		model := scenarioModelName(cfg, ScenarioLongContext)
 		return ScenarioResult{
 			Scenario:   ScenarioLongContext,
 			TokenCount: tokenCount,
-			Reason:     fmt.Sprintf("streaming token count %d exceeds threshold %d", tokenCount, threshold),
+			Reason:     fmt.Sprintf("high token count streaming (%d > %d) - use %s for acceptable TTFT", tokenCount, threshold, model),
 		}
 	}
 
 	if hasComplexPattern(messages) || hasThinkingPattern(messages) {
 		// Complex request but streaming - downgrade to faster model
-		// GLM-5 and Kimi are too slow for streaming with complex prompts
+		// Prefer the configured fast model for lower time-to-first-token.
 		return ScenarioResult{
 			Scenario:   ScenarioFast,
 			TokenCount: tokenCount,
-			Reason:     "complex request but streaming - use fast model (qwen3.6-plus) for better TTFT",
+			Reason:     fmt.Sprintf("complex request but streaming - use %s for better TTFT", scenarioModelName(cfg, ScenarioFast)),
 		}
 	}
 
@@ -219,6 +231,6 @@ func RouteForStreaming(messages []MessageContent, tokenCount int, cfg *config.Co
 	return ScenarioResult{
 		Scenario:   ScenarioFast,
 		TokenCount: tokenCount,
-		Reason:     "streaming request - use fast model (qwen3.6-plus)",
+		Reason:     fmt.Sprintf("streaming request - use %s", scenarioModelName(cfg, ScenarioFast)),
 	}
 }

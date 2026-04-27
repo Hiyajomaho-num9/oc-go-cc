@@ -16,7 +16,8 @@ func TestLoadJSON(t *testing.T) {
 		"port": 8080,
 		"opencode_go": {
 			"base_url": "https://custom.url/v1",
-			"timeout_ms": 60000
+			"timeout_ms": 60000,
+			"stream_timeout_ms": 120000
 		},
 		"logging": {
 			"level": "debug",
@@ -28,13 +29,13 @@ func TestLoadJSON(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	os.Setenv("OC_GO_CC_CONFIG", cfgPath)
-	defer os.Unsetenv("OC_GO_CC_CONFIG")
+	_ = os.Setenv("OC_GO_CC_CONFIG", cfgPath)
+	defer func() { _ = os.Unsetenv("OC_GO_CC_CONFIG") }()
 
 	// Prevent env var API key from overriding test config
 	oldAPIKey := os.Getenv("OC_GO_CC_API_KEY")
-	os.Unsetenv("OC_GO_CC_API_KEY")
-	defer os.Setenv("OC_GO_CC_API_KEY", oldAPIKey)
+	_ = os.Unsetenv("OC_GO_CC_API_KEY")
+	defer func() { _ = os.Setenv("OC_GO_CC_API_KEY", oldAPIKey) }()
 
 	cfg, err := Load()
 	if err != nil {
@@ -56,6 +57,9 @@ func TestLoadJSON(t *testing.T) {
 	if cfg.OpenCodeGo.TimeoutMs != 60000 {
 		t.Errorf("TimeoutMs = %d, want %d", cfg.OpenCodeGo.TimeoutMs, 60000)
 	}
+	if cfg.OpenCodeGo.StreamTimeoutMs != 120000 {
+		t.Errorf("StreamTimeoutMs = %d, want %d", cfg.OpenCodeGo.StreamTimeoutMs, 120000)
+	}
 	if cfg.Logging.Level != "debug" {
 		t.Errorf("LogLevel = %q, want %q", cfg.Logging.Level, "debug")
 	}
@@ -73,13 +77,13 @@ func TestLoadMissingAPIKey(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	os.Setenv("OC_GO_CC_CONFIG", cfgPath)
-	defer os.Unsetenv("OC_GO_CC_CONFIG")
+	_ = os.Setenv("OC_GO_CC_CONFIG", cfgPath)
+	defer func() { _ = os.Unsetenv("OC_GO_CC_CONFIG") }()
 
 	// Prevent env var API key from making this test pass incorrectly
 	oldAPIKey := os.Getenv("OC_GO_CC_API_KEY")
-	os.Unsetenv("OC_GO_CC_API_KEY")
-	defer os.Setenv("OC_GO_CC_API_KEY", oldAPIKey)
+	_ = os.Unsetenv("OC_GO_CC_API_KEY")
+	defer func() { _ = os.Setenv("OC_GO_CC_API_KEY", oldAPIKey) }()
 
 	_, err := Load()
 	if err == nil {
@@ -96,19 +100,21 @@ func TestEnvOverrides(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	os.Setenv("OC_GO_CC_CONFIG", cfgPath)
-	os.Setenv("OC_GO_CC_API_KEY", "env-key")
-	os.Setenv("OC_GO_CC_HOST", "env-host")
-	os.Setenv("OC_GO_CC_PORT", "9999")
-	os.Setenv("OC_GO_CC_OPENCODE_URL", "https://env-url/v1")
-	os.Setenv("OC_GO_CC_LOG_LEVEL", "warn")
+	_ = os.Setenv("OC_GO_CC_CONFIG", cfgPath)
+	_ = os.Setenv("OC_GO_CC_API_KEY", "env-key")
+	_ = os.Setenv("OC_GO_CC_HOST", "env-host")
+	_ = os.Setenv("OC_GO_CC_PORT", "9999")
+	_ = os.Setenv("OC_GO_CC_OPENCODE_URL", "https://env-url/v1")
+	_ = os.Setenv("OC_GO_CC_STREAM_TIMEOUT_MS", "900000")
+	_ = os.Setenv("OC_GO_CC_LOG_LEVEL", "warn")
 	defer func() {
-		os.Unsetenv("OC_GO_CC_CONFIG")
-		os.Unsetenv("OC_GO_CC_API_KEY")
-		os.Unsetenv("OC_GO_CC_HOST")
-		os.Unsetenv("OC_GO_CC_PORT")
-		os.Unsetenv("OC_GO_CC_OPENCODE_URL")
-		os.Unsetenv("OC_GO_CC_LOG_LEVEL")
+		_ = os.Unsetenv("OC_GO_CC_CONFIG")
+		_ = os.Unsetenv("OC_GO_CC_API_KEY")
+		_ = os.Unsetenv("OC_GO_CC_HOST")
+		_ = os.Unsetenv("OC_GO_CC_PORT")
+		_ = os.Unsetenv("OC_GO_CC_OPENCODE_URL")
+		_ = os.Unsetenv("OC_GO_CC_STREAM_TIMEOUT_MS")
+		_ = os.Unsetenv("OC_GO_CC_LOG_LEVEL")
 	}()
 
 	cfg, err := Load()
@@ -128,6 +134,9 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.OpenCodeGo.BaseURL != "https://env-url/v1" {
 		t.Errorf("BaseURL = %q, want %q", cfg.OpenCodeGo.BaseURL, "https://env-url/v1")
 	}
+	if cfg.OpenCodeGo.StreamTimeoutMs != 900000 {
+		t.Errorf("StreamTimeoutMs = %d, want %d", cfg.OpenCodeGo.StreamTimeoutMs, 900000)
+	}
 	if cfg.Logging.Level != "warn" {
 		t.Errorf("LogLevel = %q, want %q", cfg.Logging.Level, "warn")
 	}
@@ -143,8 +152,8 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	os.Setenv("OC_GO_CC_CONFIG", cfgPath)
-	defer os.Unsetenv("OC_GO_CC_CONFIG")
+	_ = os.Setenv("OC_GO_CC_CONFIG", cfgPath)
+	defer func() { _ = os.Unsetenv("OC_GO_CC_CONFIG") }()
 
 	cfg, err := Load()
 	if err != nil {
@@ -163,14 +172,44 @@ func TestDefaults(t *testing.T) {
 	if cfg.OpenCodeGo.TimeoutMs != defaultTimeoutMs {
 		t.Errorf("TimeoutMs = %d, want %d", cfg.OpenCodeGo.TimeoutMs, defaultTimeoutMs)
 	}
+	if cfg.OpenCodeGo.StreamTimeoutMs != defaultTimeoutMs {
+		t.Errorf("StreamTimeoutMs = %d, want %d", cfg.OpenCodeGo.StreamTimeoutMs, defaultTimeoutMs)
+	}
 	if cfg.Logging.Level != defaultLogLevel {
 		t.Errorf("LogLevel = %q, want %q", cfg.Logging.Level, defaultLogLevel)
 	}
 }
 
+func TestStreamTimeoutDefaultsToRequestTimeout(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	cfgJSON := `{
+		"api_key": "test-key",
+		"opencode_go": {
+			"timeout_ms": 420000
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(cfgJSON), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	_ = os.Setenv("OC_GO_CC_CONFIG", cfgPath)
+	defer func() { _ = os.Unsetenv("OC_GO_CC_CONFIG") }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.OpenCodeGo.StreamTimeoutMs != 420000 {
+		t.Errorf("StreamTimeoutMs = %d, want %d", cfg.OpenCodeGo.StreamTimeoutMs, 420000)
+	}
+}
+
 func TestInterpolateEnvVars(t *testing.T) {
-	os.Setenv("TEST_SECRET", "my-secret-value")
-	defer os.Unsetenv("TEST_SECRET")
+	_ = os.Setenv("TEST_SECRET", "my-secret-value")
+	defer func() { _ = os.Unsetenv("TEST_SECRET") }()
 
 	input := `{"api_key": "${TEST_SECRET}", "host": "${UNSET_VAR:-fallback}"}`
 	result := interpolateEnvVars(input)

@@ -19,6 +19,7 @@ type OpenCodeClient struct {
 	openAIConfig    EndpointConfig
 	anthropicConfig EndpointConfig
 	httpClient      *http.Client
+	streamClient    *http.Client
 }
 
 // EndpointConfig holds configuration for a specific API endpoint.
@@ -56,6 +57,9 @@ func NewOpenCodeClient(cfg config.OpenCodeGoConfig, apiKey string) *OpenCodeClie
 			Timeout:   timeout,
 			Transport: transport,
 		},
+		streamClient: &http.Client{
+			Transport: transport,
+		},
 	}
 }
 
@@ -84,6 +88,15 @@ func (c *OpenCodeClient) ChatCompletion(
 	modelID string,
 	req *types.ChatCompletionRequest,
 ) (*http.Response, error) {
+	return c.chatCompletion(ctx, c.httpClient, modelID, req)
+}
+
+func (c *OpenCodeClient) chatCompletion(
+	ctx context.Context,
+	httpClient *http.Client,
+	modelID string,
+	req *types.ChatCompletionRequest,
+) (*http.Response, error) {
 	endpoint := c.getEndpoint(modelID)
 
 	body, err := json.Marshal(req)
@@ -105,7 +118,7 @@ func (c *OpenCodeClient) ChatCompletion(
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -113,7 +126,7 @@ func (c *OpenCodeClient) ChatCompletion(
 	// Check for error status codes
 	if resp.StatusCode >= http.StatusBadRequest {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -130,11 +143,11 @@ func (c *OpenCodeClient) ChatCompletionNonStreaming(
 	streamFalse := false
 	req.Stream = &streamFalse
 
-	resp, err := c.ChatCompletion(ctx, modelID, req)
+	resp, err := c.chatCompletion(ctx, c.httpClient, modelID, req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -160,7 +173,7 @@ func (c *OpenCodeClient) GetStreamingBody(
 	streamTrue := true
 	req.Stream = &streamTrue
 
-	resp, err := c.ChatCompletion(ctx, modelID, req)
+	resp, err := c.chatCompletion(ctx, c.streamClient, modelID, req)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +206,11 @@ func (c *OpenCodeClient) SendAnthropicRequest(
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	resp, err := c.httpClient.Do(httpReq)
+	httpClient := c.httpClient
+	if stream {
+		httpClient = c.streamClient
+	}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -201,7 +218,7 @@ func (c *OpenCodeClient) SendAnthropicRequest(
 	// Check for error status codes
 	if resp.StatusCode >= http.StatusBadRequest {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

@@ -303,7 +303,8 @@ Override with `OC_GO_CC_CONFIG` environment variable.
 
   "opencode_go": {
     "base_url": "https://opencode.ai/zen/go/v1/chat/completions",
-    "timeout_ms": 300000
+    "timeout_ms": 300000,
+    "stream_timeout_ms": 300000
   },
 
   "logging": {
@@ -324,6 +325,7 @@ Environment variables override config file values. Config values also support `$
 | `OC_GO_CC_HOST`         | Proxy listen host                           | `127.0.0.1`                                      |
 | `OC_GO_CC_PORT`         | Proxy listen port                           | `3456`                                           |
 | `OC_GO_CC_OPENCODE_URL` | OpenCode Go API endpoint                    | `https://opencode.ai/zen/go/v1/chat/completions` |
+| `OC_GO_CC_STREAM_TIMEOUT_MS` | Per-model streaming attempt timeout in milliseconds | `timeout_ms` / `300000`                  |
 | `OC_GO_CC_LOG_LEVEL`    | Log level: `debug`, `info`, `warn`, `error` | `info`                                           |
 | `OC_GO_CC_REASONING_EFFORT` | DeepSeek reasoning effort override: `high` or `max` | —                                           |
 
