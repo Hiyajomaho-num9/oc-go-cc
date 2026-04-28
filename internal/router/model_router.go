@@ -45,6 +45,7 @@ func (r *ModelRouter) Route(messages []MessageContent, tokenCount int) (RouteRes
 		// Fall back to default fallbacks
 		fallbacks = r.config.Fallbacks["default"]
 	}
+	fallbacks = r.resolveModelConfigs(fallbacks)
 
 	return RouteResult{
 		Primary:   primary,
@@ -69,7 +70,7 @@ func (rr *RouteResult) GetModelChain() []config.ModelConfig {
 }
 
 // RouteForStreaming determines which model to use for streaming requests.
-// Prioritizes fast TTFT (time-to-first-token) over capability.
+// Preserves capability for complex/thinking/long-context requests.
 func (r *ModelRouter) RouteForStreaming(messages []MessageContent, tokenCount int) RouteResult {
 	result := RouteForStreaming(messages, tokenCount, r.config)
 
@@ -90,10 +91,76 @@ func (r *ModelRouter) RouteForStreaming(messages []MessageContent, tokenCount in
 		// Fall back to fast fallbacks
 		fallbacks = r.config.Fallbacks["fast"]
 	}
+	fallbacks = r.resolveModelConfigs(fallbacks)
 
 	return RouteResult{
 		Primary:   primary,
 		Fallbacks: fallbacks,
 		Scenario:  result.Scenario,
 	}
+}
+
+func (r *ModelRouter) resolveModelConfigs(models []config.ModelConfig) []config.ModelConfig {
+	if r == nil || r.config == nil || len(models) == 0 {
+		return models
+	}
+
+	result := make([]config.ModelConfig, 0, len(models))
+	for _, model := range models {
+		result = append(result, r.resolveModelConfig(model))
+	}
+	return result
+}
+
+func (r *ModelRouter) resolveModelConfig(model config.ModelConfig) config.ModelConfig {
+	if r == nil || r.config == nil {
+		return model
+	}
+
+	if registered, ok := r.config.Models[model.ModelID]; ok && registered.ModelID == model.ModelID {
+		return mergeModelConfig(registered, model)
+	}
+
+	for _, registered := range r.config.Models {
+		if registered.ModelID == "" || registered.ModelID != model.ModelID {
+			continue
+		}
+		return mergeModelConfig(registered, model)
+	}
+	return model
+}
+
+func mergeModelConfig(base, override config.ModelConfig) config.ModelConfig {
+	merged := base
+	if override.Provider != "" {
+		merged.Provider = override.Provider
+	}
+	if override.ModelID != "" {
+		merged.ModelID = override.ModelID
+	}
+	if override.EndpointType != "" {
+		merged.EndpointType = override.EndpointType
+	}
+	if override.Temperature > 0 {
+		merged.Temperature = override.Temperature
+	}
+	if override.MaxTokens > 0 {
+		merged.MaxTokens = override.MaxTokens
+	}
+	if override.ContextThreshold > 0 {
+		merged.ContextThreshold = override.ContextThreshold
+	}
+	if override.ReasoningEffort != "" {
+		merged.ReasoningEffort = override.ReasoningEffort
+	}
+	if override.ReasoningFormat != "" {
+		merged.ReasoningFormat = override.ReasoningFormat
+	}
+	if override.SupportsThinking != nil {
+		merged.SupportsThinking = override.SupportsThinking
+	}
+	if override.RequiresReasoningContent != nil {
+		merged.RequiresReasoningContent = override.RequiresReasoningContent
+	}
+	return merged
 }

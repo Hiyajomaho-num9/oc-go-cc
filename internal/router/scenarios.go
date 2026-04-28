@@ -201,12 +201,10 @@ func scenarioModelName(cfg *config.Config, scenario Scenario) string {
 }
 
 // RouteForStreaming selects a model optimized for streaming latency.
-// For streaming, we prioritize fast TTFT (time-to-first-token) over capability.
-// This may return a less capable model but one that streams faster.
+// For streaming, preserve capability for complex/thinking/long-context tasks.
+// Simple conversational requests may still use the configured fast model for
+// better time-to-first-token.
 func RouteForStreaming(messages []MessageContent, tokenCount int, cfg *config.Config) ScenarioResult {
-	// For streaming, use simpler models that have better TTFT
-	// Complex models can be too slow for streaming with many tools.
-
 	threshold := getLongContextThreshold(cfg)
 	if tokenCount > threshold {
 		model := scenarioModelName(cfg, ScenarioLongContext)
@@ -217,20 +215,33 @@ func RouteForStreaming(messages []MessageContent, tokenCount int, cfg *config.Co
 		}
 	}
 
-	if hasComplexPattern(messages) || hasThinkingPattern(messages) {
-		// Complex request but streaming - downgrade to faster model
-		// Prefer the configured fast model for lower time-to-first-token.
+	if hasComplexPattern(messages) {
 		return ScenarioResult{
-			Scenario:   ScenarioFast,
+			Scenario:   ScenarioComplex,
 			TokenCount: tokenCount,
-			Reason:     fmt.Sprintf("complex request but streaming - use %s for better TTFT", scenarioModelName(cfg, ScenarioFast)),
+			Reason:     fmt.Sprintf("complex streaming request - preserve capability with %s", scenarioModelName(cfg, ScenarioComplex)),
 		}
 	}
 
-	// Default to fast scenario for streaming
+	if hasThinkingPattern(messages) {
+		return ScenarioResult{
+			Scenario:   ScenarioThink,
+			TokenCount: tokenCount,
+			Reason:     fmt.Sprintf("thinking streaming request - preserve reasoning model %s", scenarioModelName(cfg, ScenarioThink)),
+		}
+	}
+
+	if hasBackgroundPattern(messages) {
+		return ScenarioResult{
+			Scenario:   ScenarioBackground,
+			TokenCount: tokenCount,
+			Reason:     fmt.Sprintf("simple background streaming task - use %s", scenarioModelName(cfg, ScenarioBackground)),
+		}
+	}
+
 	return ScenarioResult{
 		Scenario:   ScenarioFast,
 		TokenCount: tokenCount,
-		Reason:     fmt.Sprintf("streaming request - use %s", scenarioModelName(cfg, ScenarioFast)),
+		Reason:     fmt.Sprintf("simple streaming request - use %s", scenarioModelName(cfg, ScenarioFast)),
 	}
 }

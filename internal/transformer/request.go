@@ -48,6 +48,9 @@ func (t *RequestTransformer) TransformRequest(
 	if anthropicReq.TopP != nil {
 		openaiReq.TopP = anthropicReq.TopP
 	}
+	if len(anthropicReq.StopSequences) > 0 {
+		openaiReq.Stop = anthropicReq.StopSequences
+	}
 
 	// Map max_tokens
 	if anthropicReq.MaxTokens > 0 {
@@ -68,24 +71,56 @@ func (t *RequestTransformer) TransformRequest(
 	if len(anthropicReq.Tools) > 0 {
 		openaiReq.Tools = t.transformTools(anthropicReq.Tools)
 	}
+	if len(anthropicReq.ToolChoice) > 0 {
+		openaiReq.ToolChoice = transformToolChoice(anthropicReq.ToolChoice)
+	}
 
-	t.applyDeepSeekReasoningOptions(openaiReq, anthropicReq, model)
+	t.applyReasoningOptions(openaiReq, anthropicReq, model)
 
 	return openaiReq, nil
 }
 
-// applyDeepSeekReasoningOptions maps Claude/Anthropic effort controls to
-// DeepSeek's OpenAI-compatible thinking fields.
-func (t *RequestTransformer) applyDeepSeekReasoningOptions(
+func transformToolChoice(raw json.RawMessage) interface{} {
+	var choice struct {
+		Type string `json:"type"`
+		Name string `json:"name,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &choice); err != nil {
+		return raw
+	}
+
+	switch strings.ToLower(strings.TrimSpace(choice.Type)) {
+	case "auto":
+		return "auto"
+	case "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		if choice.Name != "" {
+			return map[string]interface{}{
+				"type": "function",
+				"function": map[string]interface{}{
+					"name": choice.Name,
+				},
+			}
+		}
+	}
+	return raw
+}
+
+// applyReasoningOptions maps Claude/Anthropic effort controls to provider
+// thinking fields for models that advertise OpenAI-compatible reasoning.
+func (t *RequestTransformer) applyReasoningOptions(
 	openaiReq *types.ChatCompletionRequest,
 	anthropicReq *types.MessageRequest,
 	model config.ModelConfig,
 ) {
-	if !isDeepSeekModel(model.ModelID) {
+	if !model.EffectiveSupportsThinking() || model.EffectiveReasoningFormat() != "openai" {
 		return
 	}
 
-	effort := resolveDeepSeekReasoningEffort(anthropicReq, model)
+	effort := resolveReasoningEffort(anthropicReq, model)
 	if effort == "" && !isThinkingEnabled(anthropicReq.Thinking) {
 		return
 	}
@@ -96,17 +131,7 @@ func (t *RequestTransformer) applyDeepSeekReasoningOptions(
 	}
 }
 
-func isDeepSeekModel(modelID string) bool {
-	return strings.HasPrefix(strings.ToLower(modelID), "deepseek-")
-}
-
-func needsPlaceholderReasoning(modelID string) bool {
-	// Moonshot/Kimi validators treat an empty reasoning_content field as missing
-	// on assistant tool-call messages.
-	return strings.HasPrefix(strings.ToLower(modelID), "kimi-")
-}
-
-func resolveDeepSeekReasoningEffort(anthropicReq *types.MessageRequest, model config.ModelConfig) string {
+func resolveReasoningEffort(anthropicReq *types.MessageRequest, model config.ModelConfig) string {
 	candidates := []string{
 		model.ReasoningEffort,
 	}
@@ -119,14 +144,14 @@ func resolveDeepSeekReasoningEffort(anthropicReq *types.MessageRequest, model co
 	)
 
 	for _, candidate := range candidates {
-		if effort := normalizeDeepSeekReasoningEffort(candidate); effort != "" {
+		if effort := normalizeReasoningEffort(candidate); effort != "" {
 			return effort
 		}
 	}
 	return ""
 }
 
-func normalizeDeepSeekReasoningEffort(effort string) string {
+func normalizeReasoningEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "max", "xhigh":
 		return "max"
@@ -154,8 +179,7 @@ func isThinkingEnabled(raw json.RawMessage) bool {
 // transformMessages converts Anthropic messages to OpenAI format.
 func (t *RequestTransformer) transformMessages(anthropicReq *types.MessageRequest, model config.ModelConfig) ([]types.ChatMessage, error) {
 	var result []types.ChatMessage
-	modelID := model.ModelID
-	requiresDeepSeekReasoning := isDeepSeekThinkingMode(anthropicReq, model)
+	requiresReasoning := isThinkingMode(anthropicReq, model)
 
 	// Add system message if present, preserving cache_control if available
 	systemText := anthropicReq.SystemText()
@@ -181,7 +205,7 @@ func (t *RequestTransformer) transformMessages(anthropicReq *types.MessageReques
 
 	// Transform each message
 	for _, msg := range anthropicReq.Messages {
-		openaiMsgs, err := t.transformMessage(msg, modelID, requiresDeepSeekReasoning)
+		openaiMsgs, err := t.transformMessage(msg, model, requiresReasoning)
 		if err != nil {
 			return nil, err
 		}
@@ -195,8 +219,8 @@ func (t *RequestTransformer) transformMessages(anthropicReq *types.MessageReques
 // Tool_use and tool_result require special handling to map to OpenAI's function calling format.
 func (t *RequestTransformer) transformMessage(
 	msg types.Message,
-	modelID string,
-	requiresDeepSeekReasoning bool,
+	model config.ModelConfig,
+	requiresReasoning bool,
 ) ([]types.ChatMessage, error) {
 	blocks := msg.ContentBlocks()
 
@@ -204,7 +228,7 @@ func (t *RequestTransformer) transformMessage(
 	case "user":
 		return t.transformUserMessage(blocks)
 	case "assistant":
-		return t.transformAssistantMessage(blocks, modelID, requiresDeepSeekReasoning)
+		return t.transformAssistantMessage(blocks, model, requiresReasoning)
 	default:
 		// Fallback: concatenate all text
 		var text string
@@ -260,8 +284,8 @@ func (t *RequestTransformer) transformUserMessage(blocks []types.ContentBlock) (
 // transformAssistantMessage converts an assistant message with potential tool_use blocks.
 func (t *RequestTransformer) transformAssistantMessage(
 	blocks []types.ContentBlock,
-	modelID string,
-	requiresDeepSeekReasoning bool,
+	model config.ModelConfig,
+	requiresReasoning bool,
 ) ([]types.ChatMessage, error) {
 	var textParts []string
 	var thinkingParts []string
@@ -308,8 +332,8 @@ func (t *RequestTransformer) transformAssistantMessage(
 	if reasoningContent != "" {
 		// Real thinking content from the upstream history; preserve it.
 		reasoningContentPtr = &reasoningContent
-	} else if needsReasoningPlaceholder(modelID, requiresDeepSeekReasoning, content, toolCalls) {
-		// DeepSeek thinking mode requires assistant history to include
+	} else if needsReasoningPlaceholder(model, requiresReasoning, content, toolCalls) {
+		// Some OpenAI-compatible providers require assistant history to include
 		// reasoning_content. Claude Code can drop explicit thinking blocks from
 		// prior turns, so use a harmless non-empty placeholder when needed.
 		placeholder := " "
@@ -326,23 +350,23 @@ func (t *RequestTransformer) transformAssistantMessage(
 	return []types.ChatMessage{msg}, nil
 }
 
-func isDeepSeekThinkingMode(anthropicReq *types.MessageRequest, model config.ModelConfig) bool {
-	if !isDeepSeekModel(model.ModelID) {
+func isThinkingMode(anthropicReq *types.MessageRequest, model config.ModelConfig) bool {
+	if !model.EffectiveSupportsThinking() {
 		return false
 	}
-	return resolveDeepSeekReasoningEffort(anthropicReq, model) != "" || isThinkingEnabled(anthropicReq.Thinking)
+	return resolveReasoningEffort(anthropicReq, model) != "" || isThinkingEnabled(anthropicReq.Thinking)
 }
 
 func needsReasoningPlaceholder(
-	modelID string,
-	requiresDeepSeekReasoning bool,
+	model config.ModelConfig,
+	requiresReasoning bool,
 	content string,
 	toolCalls []types.ToolCall,
 ) bool {
-	if len(toolCalls) > 0 && (isDeepSeekModel(modelID) || needsPlaceholderReasoning(modelID)) {
+	if len(toolCalls) > 0 && model.EffectiveRequiresReasoningContent() {
 		return true
 	}
-	if requiresDeepSeekReasoning && content != "" {
+	if requiresReasoning && content != "" {
 		return true
 	}
 	return false

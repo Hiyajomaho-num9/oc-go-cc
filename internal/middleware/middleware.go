@@ -57,7 +57,9 @@ func (d *RequestDeduplicator) TryAcquire(body json.RawMessage) (context.Context,
 		return nil, false
 	}
 
-	// Auto-release after window
+	// Failsafe release after the configured window. Normal handlers release
+	// explicitly when the request completes, which keeps long streaming
+	// requests protected from duplicate retries.
 	go func() {
 		select {
 		case <-time.After(d.dedupWindow):

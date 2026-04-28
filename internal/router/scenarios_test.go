@@ -159,6 +159,26 @@ func TestRouteForStreamingUsesConfiguredLongContextThreshold(t *testing.T) {
 	}
 }
 
+func TestRouteForStreamingPreservesComplexCapability(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelConfig{
+			"complex": {ModelID: "deepseek-v4-pro"},
+			"fast":    {ModelID: "deepseek-v4-flash"},
+		},
+	}
+
+	result := RouteForStreaming([]MessageContent{
+		{Role: "user", Content: "Analyze and refactor this RK3506 kernel driver"},
+	}, 5000, cfg)
+
+	if got, want := result.Scenario, ScenarioComplex; got != want {
+		t.Fatalf("RouteForStreaming() = %s, want %s", got, want)
+	}
+	if !strings.Contains(result.Reason, "deepseek-v4-pro") {
+		t.Fatalf("reason = %q, want complex model", result.Reason)
+	}
+}
+
 func TestRouteForStreamingUsesDefaultLongContextThreshold(t *testing.T) {
 	messages := []MessageContent{
 		{Role: "user", Content: "hello"},
@@ -212,5 +232,43 @@ func TestGetModelChainDeduplicatesByModelID(t *testing.T) {
 		if got := chain[i].ModelID; got != modelID {
 			t.Fatalf("chain[%d].ModelID = %q, want %q", i, got, modelID)
 		}
+	}
+}
+
+func TestRouteResolvesFallbackCapabilitiesFromRegisteredModels(t *testing.T) {
+	trueValue := true
+	cfg := &config.Config{
+		Models: map[string]config.ModelConfig{
+			"default": {
+				ModelID: "deepseek-v4-flash",
+			},
+			"deepseek-pro": {
+				ModelID:                  "deepseek-v4-pro",
+				EndpointType:             "openai",
+				MaxTokens:                32000,
+				SupportsThinking:         &trueValue,
+				RequiresReasoningContent: &trueValue,
+			},
+		},
+		Fallbacks: map[string][]config.ModelConfig{
+			"default": {
+				{ModelID: "deepseek-v4-pro"},
+			},
+		},
+	}
+
+	route, err := NewModelRouter(cfg).Route([]MessageContent{{Role: "user", Content: "hello"}}, 100)
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	chain := route.GetModelChain()
+	if got, want := len(chain), 2; got != want {
+		t.Fatalf("len(chain) = %d, want %d", got, want)
+	}
+	if got := chain[1].MaxTokens; got != 32000 {
+		t.Fatalf("fallback MaxTokens = %d, want inherited 32000", got)
+	}
+	if !chain[1].EffectiveSupportsThinking() {
+		t.Fatal("fallback did not inherit thinking capability")
 	}
 }

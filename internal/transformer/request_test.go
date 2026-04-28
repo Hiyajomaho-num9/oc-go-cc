@@ -458,3 +458,63 @@ func TestTransformRequestDoesNotApplyDeepSeekReasoningToOtherModels(t *testing.T
 		t.Fatalf("ReasoningEffort = %q, want empty for non-DeepSeek model", openaiReq.ReasoningEffort)
 	}
 }
+
+func TestTransformRequestMapsStopSequencesAndToolChoice(t *testing.T) {
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:         "claude-test",
+		MaxTokens:     256,
+		StopSequences: []string{"STOP"},
+		ToolChoice:    json.RawMessage(`{"type":"tool","name":"read_file"}`),
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	stop, ok := openaiReq.Stop.([]string)
+	if !ok || len(stop) != 1 || stop[0] != "STOP" {
+		t.Fatalf("Stop = %#v, want STOP slice", openaiReq.Stop)
+	}
+
+	choice, ok := openaiReq.ToolChoice.(map[string]interface{})
+	if !ok {
+		t.Fatalf("ToolChoice = %#v, want OpenAI function choice", openaiReq.ToolChoice)
+	}
+	fn := choice["function"].(map[string]interface{})
+	if got, want := fn["name"], "read_file"; got != want {
+		t.Fatalf("tool choice name = %q, want %q", got, want)
+	}
+}
+
+func TestTransformRequestSupportsConfiguredThinkingModel(t *testing.T) {
+	t.Setenv("OC_GO_CC_REASONING_EFFORT", "")
+	t.Setenv("CLAUDE_CODE_EFFORT_LEVEL", "")
+	supportsThinking := true
+
+	transformer := NewRequestTransformer()
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Thinking:  json.RawMessage(`{"type":"enabled"}`),
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{
+		ModelID:          "custom-reasoner",
+		SupportsThinking: &supportsThinking,
+		ReasoningFormat:  "openai",
+	})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+	if len(openaiReq.Thinking) == 0 {
+		t.Fatal("Thinking is empty, want enabled thinking for configured reasoner")
+	}
+}

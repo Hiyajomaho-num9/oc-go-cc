@@ -119,7 +119,7 @@ func serveCmd() *cobra.Command {
 				return fmt.Errorf("failed to create server: %w", err)
 			}
 
-			fmt.Printf("Starting %s v%s\n", appName, version)
+			fmt.Printf("Starting %s %s\n", appName, displayVersion())
 			fmt.Printf("Listening on %s:%d\n", cfg.Host, cfg.Port)
 			fmt.Printf("Forwarding to: %s\n", cfg.OpenCodeGo.BaseURL)
 			fmt.Println()
@@ -246,7 +246,7 @@ func validateCmd() *cobra.Command {
 			fmt.Println("Configuration is valid!")
 			fmt.Printf("  Host: %s\n", cfg.Host)
 			fmt.Printf("  Port: %d\n", cfg.Port)
-			fmt.Printf("  API Key: %s...\n", maskString(cfg.APIKey, 8))
+			fmt.Printf("  API Key: %s\n", maskString(cfg.APIKey, 4))
 			fmt.Printf("  Base URL: %s\n", cfg.OpenCodeGo.BaseURL)
 			fmt.Printf("  Models configured: %d\n", len(cfg.Models))
 			fmt.Printf("  Fallback chains: %d\n", len(cfg.Fallbacks))
@@ -278,8 +278,8 @@ func modelsCmd() *cobra.Command {
 			fmt.Println("  mimo-v2-omni       OpenAI-compatible")
 			fmt.Println("  minimax-m2.7       Anthropic-compatible")
 			fmt.Println("  minimax-m2.5       Anthropic-compatible")
-			fmt.Println("  deepseek-v4-pro    Anthropic-compatible")
-			fmt.Println("  deepseek-v4-flash  Anthropic-compatible")
+			fmt.Println("  deepseek-v4-pro    OpenAI-compatible")
+			fmt.Println("  deepseek-v4-flash  OpenAI-compatible")
 			fmt.Println("  qwen3.6-plus       OpenAI-compatible")
 			fmt.Println("  qwen3.5-plus       OpenAI-compatible")
 			fmt.Println()
@@ -352,9 +352,16 @@ func getPIDPath() string {
 // maskString masks all but the first `visible` characters of a string.
 func maskString(s string, visible int) string {
 	if len(s) <= visible {
-		return s
+		return "***"
 	}
 	return s[:visible] + "..."
+}
+
+func displayVersion() string {
+	if version == "" {
+		return "dev"
+	}
+	return version
 }
 
 // getDefaultConfig returns a default configuration JSON template.
@@ -368,24 +375,28 @@ func getDefaultConfig() string {
     "budget": {
       "provider": "opencode-go",
       "model_id": "qwen3.6-plus",
+      "endpoint_type": "openai",
       "temperature": 0.7,
       "max_tokens": 4096
     },
     "background": {
       "provider": "opencode-go",
       "model_id": "qwen3.5-plus",
+      "endpoint_type": "openai",
       "temperature": 0.5,
       "max_tokens": 2048
     },
     "default": {
       "provider": "opencode-go",
       "model_id": "kimi-k2.6",
+      "endpoint_type": "openai",
       "temperature": 0.7,
       "max_tokens": 4096
     },
     "long_context": {
       "provider": "opencode-go",
       "model_id": "minimax-m2.5",
+      "endpoint_type": "anthropic",
       "temperature": 0.7,
       "max_tokens": 16384,
       "context_threshold": 80000
@@ -393,18 +404,21 @@ func getDefaultConfig() string {
     "think": {
       "provider": "opencode-go",
       "model_id": "glm-5",
+      "endpoint_type": "openai",
       "temperature": 0.7,
       "max_tokens": 8192
     },
     "complex": {
       "provider": "opencode-go",
       "model_id": "glm-5.1",
+      "endpoint_type": "openai",
       "temperature": 0.7,
       "max_tokens": 4096
     },
     "fast": {
       "provider": "opencode-go",
       "model_id": "qwen3.6-plus",
+      "endpoint_type": "openai",
       "temperature": 0.7,
       "max_tokens": 4096
     }
@@ -449,7 +463,7 @@ func getDefaultConfig() string {
   },
   "logging": {
     "level": "info",
-    "requests": true
+    "requests": false
   }
 }
 `

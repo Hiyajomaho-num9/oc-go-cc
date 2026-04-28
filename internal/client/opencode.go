@@ -63,19 +63,15 @@ func NewOpenCodeClient(cfg config.OpenCodeGoConfig, apiKey string) *OpenCodeClie
 	}
 }
 
-// IsAnthropicModel returns true if the model requires the Anthropic endpoint.
+// IsAnthropicModel returns true if the known model requires the Anthropic
+// endpoint. Prefer config.ModelConfig.UsesAnthropicEndpoint for routed models.
 func IsAnthropicModel(modelID string) bool {
-	switch modelID {
-	case "minimax-m2.5", "minimax-m2.7":
-		return true
-	default:
-		return false
-	}
+	return config.ModelConfig{ModelID: modelID}.UsesAnthropicEndpoint()
 }
 
 // getEndpoint returns the appropriate endpoint config for a model.
-func (c *OpenCodeClient) getEndpoint(modelID string) EndpointConfig {
-	if IsAnthropicModel(modelID) {
+func (c *OpenCodeClient) getEndpoint(model config.ModelConfig) EndpointConfig {
+	if model.UsesAnthropicEndpoint() {
 		return c.anthropicConfig
 	}
 	return c.openAIConfig
@@ -85,19 +81,19 @@ func (c *OpenCodeClient) getEndpoint(modelID string) EndpointConfig {
 // Returns the raw HTTP response for the caller to handle (streaming or body read).
 func (c *OpenCodeClient) ChatCompletion(
 	ctx context.Context,
-	modelID string,
+	model config.ModelConfig,
 	req *types.ChatCompletionRequest,
 ) (*http.Response, error) {
-	return c.chatCompletion(ctx, c.httpClient, modelID, req)
+	return c.chatCompletion(ctx, c.httpClient, model, req)
 }
 
 func (c *OpenCodeClient) chatCompletion(
 	ctx context.Context,
 	httpClient *http.Client,
-	modelID string,
+	model config.ModelConfig,
 	req *types.ChatCompletionRequest,
 ) (*http.Response, error) {
-	endpoint := c.getEndpoint(modelID)
+	endpoint := c.getEndpoint(model)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -136,14 +132,14 @@ func (c *OpenCodeClient) chatCompletion(
 // ChatCompletionNonStreaming sends a non-streaming request and returns the full parsed response.
 func (c *OpenCodeClient) ChatCompletionNonStreaming(
 	ctx context.Context,
-	modelID string,
+	model config.ModelConfig,
 	req *types.ChatCompletionRequest,
 ) (*types.ChatCompletionResponse, error) {
 	// Force non-streaming
 	streamFalse := false
 	req.Stream = &streamFalse
 
-	resp, err := c.chatCompletion(ctx, c.httpClient, modelID, req)
+	resp, err := c.chatCompletion(ctx, c.httpClient, model, req)
 	if err != nil {
 		return nil, err
 	}
@@ -166,14 +162,14 @@ func (c *OpenCodeClient) ChatCompletionNonStreaming(
 // The caller is responsible for closing the returned ReadCloser.
 func (c *OpenCodeClient) GetStreamingBody(
 	ctx context.Context,
-	modelID string,
+	model config.ModelConfig,
 	req *types.ChatCompletionRequest,
 ) (io.ReadCloser, error) {
 	// Force streaming
 	streamTrue := true
 	req.Stream = &streamTrue
 
-	resp, err := c.chatCompletion(ctx, c.streamClient, modelID, req)
+	resp, err := c.chatCompletion(ctx, c.streamClient, model, req)
 	if err != nil {
 		return nil, err
 	}

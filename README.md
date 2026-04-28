@@ -309,7 +309,7 @@ Override with `OC_GO_CC_CONFIG` environment variable.
 
   "logging": {
     "level": "info",
-    "requests": true
+    "requests": false
   }
 }
 ```
@@ -360,7 +360,7 @@ The proxy automatically detects the type of request and routes to the appropriat
 | **Long Context** | Token count exceeds `context_threshold`                                      | `models.long_context` | `minimax-m2.7` |
 | **Background**   | File read, directory list, grep patterns                                     | `models.background`   | `qwen3.5-plus` |
 
-Routing priority: **Long Context** → **Think** → **Background** → **Default**
+Routing priority: **Long Context** → **Complex** → **Think** → **Background** → **Default**. Streaming preserves long-context/complex/thinking routing and only uses `fast` for simple streaming requests.
 
 ### Fallback Chains
 
@@ -477,11 +477,11 @@ For maximum logging, run with debug level:
 OC_GO_CC_LOG_LEVEL=debug oc-go-cc serve
 ```
 
-This logs:
+If `"logging.requests": true` is enabled in the config, debug mode logs redacted and truncated bodies for:
 
-- Raw Anthropic request body from Claude Code
+- Anthropic request body from Claude Code
 - Transformed OpenAI request sent to OpenCode Go
-- Raw OpenAI response received
+- OpenAI/Anthropic upstream responses
 - SSE stream events during streaming
 
 ## Architecture

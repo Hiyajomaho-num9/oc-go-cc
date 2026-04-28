@@ -99,3 +99,31 @@ func TestStreamingAttemptTimeoutFallsBackToRequestTimeout(t *testing.T) {
 		t.Fatalf("streamingAttemptTimeout() = %s, want %s", got, want)
 	}
 }
+
+func TestRedactJSONForLogMasksSecretsAndTruncatesPromptText(t *testing.T) {
+	body := []byte(`{
+		"api_key": "sk-secret",
+		"messages": [{
+			"role": "user",
+			"content": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+		}]
+	}`)
+
+	redacted := redactJSONForLog(body)
+	if strings.Contains(redacted, "sk-secret") {
+		t.Fatalf("redacted log still contains secret: %s", redacted)
+	}
+	if !strings.Contains(redacted, "[redacted]") {
+		t.Fatalf("redacted log = %s, want redacted marker", redacted)
+	}
+	if !strings.Contains(redacted, "truncated") {
+		t.Fatalf("redacted log = %s, want truncated prompt marker", redacted)
+	}
+}
+
+func TestDedupFailsafeWindowUsesStreamTimeoutPlusBuffer(t *testing.T) {
+	cfg := &config.Config{OpenCodeGo: config.OpenCodeGoConfig{StreamTimeoutMs: 600000}}
+	if got, want := dedupFailsafeWindow(cfg), 11*time.Minute; got != want {
+		t.Fatalf("dedupFailsafeWindow() = %s, want %s", got, want)
+	}
+}

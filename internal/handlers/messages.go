@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,10 +97,24 @@ func NewMessagesHandler(
 		tokenCounter:        tokenCounter,
 		logger:              slog.Default(),
 		rateLimiter:         middleware.NewRateLimiter(100, time.Minute),
-		requestDedup:        middleware.NewRequestDeduplicator(500 * time.Millisecond),
+		requestDedup:        middleware.NewRequestDeduplicator(dedupFailsafeWindow(cfg)),
 		requestIDGen:        middleware.NewRequestIDGenerator(),
 		metrics:             metrics,
 	}
+}
+
+func dedupFailsafeWindow(cfg *config.Config) time.Duration {
+	timeoutMs := 0
+	if cfg != nil {
+		timeoutMs = cfg.OpenCodeGo.StreamTimeoutMs
+		if timeoutMs <= 0 {
+			timeoutMs = cfg.OpenCodeGo.TimeoutMs
+		}
+	}
+	if timeoutMs <= 0 {
+		return 15 * time.Minute
+	}
+	return time.Duration(timeoutMs)*time.Millisecond + time.Minute
 }
 
 func (h *MessagesHandler) streamingAttemptTimeout() time.Duration {
@@ -153,6 +168,7 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		h.sendError(w, http.StatusConflict, "duplicate request skipped", nil)
 		return
 	}
+	defer h.requestDedup.Release(rawBody)
 
 	// Parse into Anthropic request
 	var anthropicReq types.MessageRequest
@@ -208,8 +224,8 @@ func (h *MessagesHandler) HandleMessages(w http.ResponseWriter, r *http.Request)
 		tokenCount = 0
 	}
 
-	// Route to appropriate model.
-	// For streaming, use faster models to minimize TTFT (time-to-first-token)
+	// Route to appropriate model. Streaming preserves capability for complex,
+	// thinking, and long-context requests; simple streaming can use fast models.
 	var routeResult router.RouteResult
 	if isStreaming {
 		routeResult = h.modelRouter.RouteForStreaming(routerMessages, tokenCount)
@@ -310,7 +326,7 @@ func (h *MessagesHandler) handleStreaming(
 		ctx, cancel := context.WithTimeout(clientCtx, attemptTimeout)
 
 		// Check if this is an Anthropic-native model.
-		if client.IsAnthropicModel(model.ModelID) {
+		if model.UsesAnthropicEndpoint() {
 			// Send raw Anthropic request to the Anthropic endpoint, but replace
 			// the requested model with the routed model first.
 			modelBody := replaceModelInRawBody(rawBody, model.ModelID)
@@ -340,7 +356,7 @@ func (h *MessagesHandler) handleStreaming(
 		}
 
 		// Get streaming body from upstream
-		streamBody, err := h.client.GetStreamingBody(ctx, model.ModelID, openaiReq)
+		streamBody, err := h.client.GetStreamingBody(ctx, model, openaiReq)
 		if err != nil {
 			cancel()
 			// Check if this was a client disconnect (context canceled)
@@ -366,7 +382,9 @@ func (h *MessagesHandler) handleStreaming(
 				return
 			}
 			h.logger.Warn("stream proxy failed", "model", model.ModelID, "error", err)
-			continue
+			h.metrics.RecordFailure()
+			h.sendStreamError(rw, fmt.Sprintf("upstream stream failed after response started: %v", err))
+			return
 		}
 
 		_ = streamBody.Close()
@@ -412,13 +430,6 @@ func replaceModelInRawBody(rawBody json.RawMessage, modelID string) json.RawMess
 	return json.RawMessage(updated)
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // handleAnthropicStreaming sends a raw Anthropic request to the Anthropic endpoint.
 func (h *MessagesHandler) handleAnthropicStreaming(
 	ctx context.Context,
@@ -426,10 +437,7 @@ func (h *MessagesHandler) handleAnthropicStreaming(
 	rawBody json.RawMessage,
 	modelID string,
 ) error {
-	// Debug: Log what we're sending
-	h.logger.Debug("sending anthropic streaming request",
-		"model_id", modelID,
-		"body_preview", string(rawBody)[:min(len(rawBody), 200)])
+	h.logJSONDebug("sending anthropic streaming request", rawBody, "model_id", modelID)
 
 	// Send raw Anthropic request to Anthropic endpoint
 	// Use ctx so cancellation propagates when client disconnects
@@ -491,7 +499,7 @@ func (h *MessagesHandler) handleNonStreaming(
 		modelChain,
 		func(ctx context.Context, model config.ModelConfig) ([]byte, error) {
 			// Check if this is an Anthropic-native model.
-			if client.IsAnthropicModel(model.ModelID) {
+			if model.UsesAnthropicEndpoint() {
 				return h.executeAnthropicRequest(ctx, rawBody, model)
 			}
 			// Otherwise use OpenAI transformation
@@ -546,7 +554,7 @@ func (h *MessagesHandler) executeAnthropicRawRequest(
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	h.logger.Debug("anthropic response", "body", string(body))
+	h.logJSONDebug("anthropic response", body)
 
 	return body, nil
 }
@@ -565,17 +573,17 @@ func (h *MessagesHandler) executeOpenAIRequest(
 
 	// Log the transformed request for debugging
 	reqJSON, _ := json.Marshal(openaiReq)
-	h.logger.Debug("transformed OpenAI request", "body", string(reqJSON))
+	h.logJSONDebug("transformed OpenAI request", reqJSON)
 
 	// Handle non-streaming.
-	resp, err := h.client.ChatCompletionNonStreaming(ctx, model.ModelID, openaiReq)
+	resp, err := h.client.ChatCompletionNonStreaming(ctx, model, openaiReq)
 	if err != nil {
 		return nil, fmt.Errorf("chat completion failed: %w", err)
 	}
 
 	// Log the raw response for debugging
 	respJSON, _ := json.Marshal(resp)
-	h.logger.Debug("OpenAI response", "body", string(respJSON))
+	h.logJSONDebug("OpenAI response", respJSON)
 
 	// Transform response to Anthropic format.
 	anthropicResp, err := h.responseTransformer.TransformResponse(resp, model.ModelID)
@@ -604,6 +612,93 @@ func extractTextFromBlocks(blocks []types.ContentBlock) string {
 		}
 	}
 	return content
+}
+
+func (h *MessagesHandler) logJSONDebug(message string, raw []byte, attrs ...interface{}) {
+	if h == nil || h.config == nil || !h.config.Logging.Requests {
+		return
+	}
+	args := append([]interface{}{}, attrs...)
+	args = append(args, "body", redactJSONForLog(raw))
+	h.logger.Debug(message, args...)
+}
+
+func redactJSONForLog(raw []byte) string {
+	var value interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return truncateLogString(string(raw), 4096)
+	}
+
+	sanitized := sanitizeLogValue("", value)
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return truncateLogString(string(raw), 4096)
+	}
+	return truncateLogString(string(encoded), 4096)
+}
+
+func sanitizeLogValue(key string, value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for k, child := range v {
+			out[k] = sanitizeLogValue(k, child)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, child := range v {
+			out = append(out, sanitizeLogValue(key, child))
+		}
+		return out
+	case string:
+		lowerKey := strings.ToLower(key)
+		if isSensitiveLogKey(lowerKey) {
+			return "[redacted]"
+		}
+		if isPromptLogKey(lowerKey) {
+			return truncateLogString(v, 320)
+		}
+		return truncateLogString(v, 1024)
+	default:
+		return v
+	}
+}
+
+func isSensitiveLogKey(key string) bool {
+	sensitive := []string{
+		"api_key",
+		"apikey",
+		"authorization",
+		"x-api-key",
+		"token",
+		"access_token",
+		"refresh_token",
+		"secret",
+		"password",
+	}
+	for _, part := range sensitive {
+		if strings.Contains(key, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPromptLogKey(key string) bool {
+	switch key {
+	case "content", "text", "thinking", "system", "arguments", "input", "output":
+		return true
+	default:
+		return false
+	}
+}
+
+func truncateLogString(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	return s[:limit] + fmt.Sprintf("...[truncated %d bytes]", len(s)-limit)
 }
 
 // sendError sends an error response in Anthropic format.

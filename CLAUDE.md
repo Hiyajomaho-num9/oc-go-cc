@@ -37,7 +37,7 @@ Run a single test: `go test ./internal/router/ -v`
 4. Background (simple read-only ops, no tools) → Qwen3.5 Plus
 5. Default → Kimi K2.6
 
-For streaming, the router downgrades to fast models (Qwen3.6 Plus) for better TTFT.
+For streaming, the router preserves long-context/complex/thinking scenarios and only uses fast models for simple streaming requests.
 
 **Polymorphic field handling:** Anthropic's `system` and `content` fields accept both strings and arrays. `pkg/types/` uses `json.RawMessage` with accessor methods (`SystemText()`, `ContentBlocks()`) to handle both formats.
 
