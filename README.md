@@ -25,7 +25,7 @@ OpenCode Go gives you access to powerful open coding models for **$5/month** (th
 
 ### Download a Release Binary
 
-Download the latest release for your platform from the [Releases page](https://github.com/Hiyajomaho-num9/oc-go-cc/releases):
+Download the latest Linux/macOS release binary from the [Releases page](https://github.com/Hiyajomaho-num9/oc-go-cc/releases):
 
 | Platform              | File                         |
 | --------------------- | ---------------------------- |
@@ -33,8 +33,6 @@ Download the latest release for your platform from the [Releases page](https://g
 | macOS (Intel)         | `oc-go-cc_darwin-amd64`      |
 | Linux (x86_64)        | `oc-go-cc_linux-amd64`       |
 | Linux (ARM64)         | `oc-go-cc_linux-arm64`       |
-| Windows (x86_64)      | `oc-go-cc_windows-amd64.exe` |
-| Windows (ARM64)       | `oc-go-cc_windows-arm64.exe` |
 
 ```bash
 # Example: Linux x86_64
