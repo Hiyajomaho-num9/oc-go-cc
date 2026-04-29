@@ -254,6 +254,8 @@ Location: `~/.config/oc-go-cc/config.json`
 
 Override with `OC_GO_CC_CONFIG` environment variable.
 
+DeepSeek-focused example: [`configs/deepseek.example.json`](configs/deepseek.example.json).
+
 ### Full Config Reference
 
 ```json
