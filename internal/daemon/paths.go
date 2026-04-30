@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,6 +97,7 @@ func resolveExecutablePath(execPath string) string {
 
 	resolved, err := filepath.EvalSymlinks(execPath)
 	if err != nil {
+		slog.Warn("symlink resolution failed, using raw path", "path", execPath, "err", err)
 		return execPath
 	}
 	return resolved

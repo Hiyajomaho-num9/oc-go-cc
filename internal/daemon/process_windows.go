@@ -23,6 +23,11 @@ func IsProcessRunning(pid int) bool {
 }
 
 // StopProcess terminates a process on Windows.
+// Unlike the Unix implementation which sends SIGTERM for graceful shutdown,
+// this uses process.Kill() (TerminateProcess) which immediately terminates the
+// process without cleanup. In-flight requests are dropped and deferred functions
+// do not run. A future improvement could use a named pipe or event for graceful
+// shutdown.
 func StopProcess(pid int) error {
 	process, err := os.FindProcess(pid)
 	if err != nil {

@@ -14,8 +14,8 @@ func IsProcessRunning(pid int) bool {
 	if err != nil {
 		return false
 	}
-	// Send signal 0 to check if process exists.
-	err = process.Signal(os.Signal(nil))
+	// Send signal 0 to check if process exists without actually signaling it.
+	err = process.Signal(syscall.Signal(0))
 	return err == nil
 }
 
