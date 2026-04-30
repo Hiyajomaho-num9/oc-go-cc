@@ -183,6 +183,29 @@ func TestTransformRequestIncludesStreamUsageOptions(t *testing.T) {
 	}
 }
 
+func TestTransformRequestOmitsStreamUsageOptionsWhenStreamingDisabled(t *testing.T) {
+	transformer := NewRequestTransformer()
+	stream := false
+
+	req := &types.MessageRequest{
+		Model:     "claude-test",
+		MaxTokens: 256,
+		Stream:    &stream,
+		Messages: []types.Message{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	openaiReq, err := transformer.TransformRequest(req, config.ModelConfig{ModelID: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("TransformRequest() error = %v", err)
+	}
+
+	if openaiReq.StreamOptions != nil {
+		t.Fatalf("StreamOptions = %v, want nil when streaming is disabled", openaiReq.StreamOptions)
+	}
+}
+
 func TestTransformRequestIncludesEmptyReasoningContentForToolCalls(t *testing.T) {
 	transformer := NewRequestTransformer()
 

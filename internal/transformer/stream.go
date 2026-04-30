@@ -425,7 +425,10 @@ func (h *StreamHandler) processSSELine(
 
 func (h *StreamHandler) sendUsageDelta(w http.ResponseWriter, flusher http.Flusher, usage *types.UsageInfo) error {
 	event := types.MessageEvent{
-		Type:  "message_delta",
+		Type: "message_delta",
+		Delta: &types.Delta{
+			StopReason: "end_turn",
+		},
 		Usage: usageInfoToAnthropic(usage),
 	}
 	if err := writeSSEEvent(w, event); err != nil {
