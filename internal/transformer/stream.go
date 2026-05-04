@@ -22,6 +22,10 @@ type StreamHandler struct {
 	responseTransformer *ResponseTransformer
 }
 
+type activeToolUse struct {
+	anthropicIndex int
+}
+
 // NewStreamHandler creates a new stream handler.
 func NewStreamHandler() *StreamHandler {
 	return &StreamHandler{
@@ -71,6 +75,9 @@ func (h *StreamHandler) ProxyStream(
 	var lineBuf bytes.Buffer
 	contentStarted := false
 	reasoningStarted := false
+	stopSent := false
+	activeToolUses := make(map[int]activeToolUse)
+	var toolUseOrder []int
 
 	// Read in larger chunks for efficiency, then parse lines
 	readBuf := make([]byte, 4096)
@@ -94,7 +101,7 @@ func (h *StreamHandler) ProxyStream(
 					lineBuf.Reset()
 
 					// Process complete line
-					if err := h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, &reasoningStarted, originalModel); err != nil {
+					if err := h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, &reasoningStarted, &stopSent, activeToolUses, &toolUseOrder, originalModel); err != nil {
 						return err
 					}
 				} else {
@@ -107,7 +114,7 @@ func (h *StreamHandler) ProxyStream(
 			// Process any remaining data in buffer
 			if lineBuf.Len() > 0 {
 				line := lineBuf.String()
-				if err := h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, &reasoningStarted, originalModel); err != nil {
+				if err := h.processSSELine(w, flusher, line, &contentIndex, &contentStarted, &reasoningStarted, &stopSent, activeToolUses, &toolUseOrder, originalModel); err != nil {
 					return err
 				}
 			}
@@ -139,6 +146,9 @@ func (h *StreamHandler) processSSELine(
 	contentIndex *int,
 	contentStarted *bool,
 	reasoningStarted *bool,
+	stopSent *bool,
+	activeToolUses map[int]activeToolUse,
+	toolUseOrder *[]int,
 	originalModel string,
 ) error {
 	line = strings.TrimSpace(line)
@@ -226,7 +236,8 @@ func (h *StreamHandler) processSSELine(
 	// usage, fall through to full JSON parsing so usage is preserved.
 	if strings.Contains(data, `"finish_reason":`) &&
 		!strings.Contains(data, `"finish_reason":null`) &&
-		!strings.Contains(data, `"usage":`) {
+		!strings.Contains(data, `"usage":`) &&
+		len(*toolUseOrder) == 0 {
 		// Close any open content block (reasoning or text)
 		if *contentStarted || *reasoningStarted {
 			stopEvent := types.MessageEvent{
@@ -248,6 +259,7 @@ func (h *StreamHandler) processSSELine(
 		if err := writeSSEEvent(w, msgDelta); err != nil {
 			return ErrClientDisconnected
 		}
+		*stopSent = true
 		flusher.Flush()
 		return nil
 	}
@@ -261,8 +273,22 @@ func (h *StreamHandler) processSSELine(
 
 	if len(chunk.Choices) == 0 {
 		if chunk.Usage != nil {
-			if err := h.sendUsageDelta(w, flusher, chunk.Usage); err != nil {
-				return err
+			if *stopSent {
+				// Stop reason already sent — emit usage-only message_delta (no duplicate stop_reason).
+				event := types.MessageEvent{
+					Type:  "message_delta",
+					Delta: &types.Delta{},
+					Usage: usageInfoToAnthropic(chunk.Usage),
+				}
+				if err := writeSSEEvent(w, event); err != nil {
+					return ErrClientDisconnected
+				}
+				flusher.Flush()
+			} else {
+				if err := h.sendUsageDelta(w, flusher, chunk.Usage); err != nil {
+					return err
+				}
+				*stopSent = true
 			}
 		}
 		return nil
@@ -354,44 +380,72 @@ func (h *StreamHandler) processSSELine(
 
 	// Handle tool call deltas
 	if len(choice.Delta.ToolCalls) > 0 {
-		for _, tc := range choice.Delta.ToolCalls {
-			*contentIndex++
-
-			input := json.RawMessage(`{}`)
-			toolID := tc.ID
-			if toolID == "" {
-				toolID = fmt.Sprintf("toolu_%s", generateID())
-			}
-			startEvent := types.MessageEvent{
-				Type:  "content_block_start",
+		if *contentStarted || *reasoningStarted {
+			stopEvent := types.MessageEvent{
+				Type:  "content_block_stop",
 				Index: contentIndex,
-				ContentBlock: &types.ContentBlock{
-					Type:  "tool_use",
-					ID:    toolID,
-					Name:  tc.Function.Name,
-					Input: input,
-				},
 			}
-			if err := writeSSEEvent(w, startEvent); err != nil {
+			if err := writeSSEEvent(w, stopEvent); err != nil {
 				return ErrClientDisconnected
+			}
+			*contentIndex++
+			*contentStarted = false
+			*reasoningStarted = false
+		}
+
+		for _, tc := range choice.Delta.ToolCalls {
+			toolIndex := tc.Index
+			active, exists := activeToolUses[toolIndex]
+			if !exists {
+				if tc.Function.Name == "" {
+					// OpenAI-compatible providers stream tool calls in fragments.
+					// Continuation fragments without a name cannot start an Anthropic tool_use block.
+					continue
+				}
+
+				input := json.RawMessage(`{}`)
+				toolID := tc.ID
+				if toolID == "" {
+					toolID = fmt.Sprintf("toolu_%s", generateID())
+				}
+
+				active = activeToolUse{anthropicIndex: *contentIndex}
+				activeToolUses[toolIndex] = active
+				*toolUseOrder = append(*toolUseOrder, toolIndex)
+
+				startEvent := types.MessageEvent{
+					Type:  "content_block_start",
+					Index: contentIndex,
+					ContentBlock: &types.ContentBlock{
+						Type:  "tool_use",
+						ID:    toolID,
+						Name:  tc.Function.Name,
+						Input: input,
+					},
+				}
+				if err := writeSSEEvent(w, startEvent); err != nil {
+					return ErrClientDisconnected
+				}
+				*contentIndex++
 			}
 
 			if tc.Function.Arguments != "" {
+				idx := active.anthropicIndex
 				delta := types.Delta{
 					Type:        "input_json_delta",
 					PartialJSON: tc.Function.Arguments,
 				}
 				event := types.MessageEvent{
 					Type:  "content_block_delta",
-					Index: contentIndex,
+					Index: &idx,
 					Delta: &delta,
 				}
 				if err := writeSSEEvent(w, event); err != nil {
 					return ErrClientDisconnected
 				}
 			}
-			flusher.Flush()
 		}
+		flusher.Flush()
 	}
 
 	// Handle finish reason
@@ -407,6 +461,26 @@ func (h *StreamHandler) processSSELine(
 			}
 		}
 
+		// Close any open tool_use blocks using their original Anthropic indexes.
+		if len(*toolUseOrder) > 0 {
+			for _, toolIndex := range *toolUseOrder {
+				active, ok := activeToolUses[toolIndex]
+				if !ok {
+					continue
+				}
+				idx := active.anthropicIndex
+				stopEvent := types.MessageEvent{
+					Type:  "content_block_stop",
+					Index: &idx,
+				}
+				if err := writeSSEEvent(w, stopEvent); err != nil {
+					return ErrClientDisconnected
+				}
+				delete(activeToolUses, toolIndex)
+			}
+			*toolUseOrder = (*toolUseOrder)[:0]
+		}
+
 		msgDelta := types.MessageEvent{
 			Type: "message_delta",
 			Delta: &types.Delta{
@@ -417,6 +491,7 @@ func (h *StreamHandler) processSSELine(
 		if err := writeSSEEvent(w, msgDelta); err != nil {
 			return ErrClientDisconnected
 		}
+		*stopSent = true
 		flusher.Flush()
 	}
 

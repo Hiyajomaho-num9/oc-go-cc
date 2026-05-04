@@ -249,6 +249,55 @@ func TestProxyStream_UsageOnlyChunk(t *testing.T) {
 	}
 }
 
+// TestProxyStream_NoDuplicateMessageDelta verifies that when finish_reason and
+// usage arrive in separate chunks, only ONE message_delta with a stop_reason
+// is emitted. Usage may arrive in a separate message_delta (without stop_reason)
+// if the upstream sends them in separate chunks.
+func TestProxyStream_NoDuplicateMessageDelta(t *testing.T) {
+	handler := NewStreamHandler()
+	w := newMockResponseWriter()
+	body := sseLines(
+		`{"choices":[{"delta":{"content":"Hello"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := handler.ProxyStream(w, body, "deepseek-v4-pro", ctx); err != nil {
+		t.Fatalf("ProxyStream error: %v", err)
+	}
+
+	events := parseSSEEvents(t, w.buf.String())
+
+	// Count message_delta events with a stop_reason
+	var stopDeltas []types.MessageEvent
+	for _, ev := range events {
+		if ev.Type == "message_delta" && ev.Delta != nil && ev.Delta.StopReason != "" {
+			stopDeltas = append(stopDeltas, ev)
+		}
+	}
+
+	if len(stopDeltas) != 1 {
+		t.Fatalf("expected exactly 1 message_delta with stop_reason, got %d: %+v", len(stopDeltas), stopDeltas)
+	}
+
+	// Verify usage is somewhere in the stream
+	var totalUsage *types.Usage
+	for _, ev := range events {
+		if ev.Usage != nil {
+			totalUsage = ev.Usage
+		}
+	}
+	if totalUsage == nil {
+		t.Fatalf("no usage found in stream: %+v", events)
+	}
+	if got, want := totalUsage.InputTokens, 100; got != want {
+		t.Errorf("InputTokens = %d, want %d", got, want)
+	}
+}
+
 func TestProxyStream_ReasoningJSONFallback(t *testing.T) {
 	handler := NewStreamHandler()
 	w := newMockResponseWriter()
@@ -428,6 +477,60 @@ func TestProxyStream_ReasoningBeforeContentFastPathRegression(t *testing.T) {
 	}
 	if events[5].Delta.Text != "Hello" {
 		t.Errorf("event[5].Delta.Text = %q, want Hello", events[5].Delta.Text)
+	}
+}
+
+func TestProxyStream_ToolCallDeltasReuseSingleToolUseBlock(t *testing.T) {
+	handler := NewStreamHandler()
+	w := newMockResponseWriter()
+	body := sseLines(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"read_file","arguments":"{\"path\""}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := handler.ProxyStream(w, body, "qwen3.6-plus", ctx); err != nil {
+		t.Fatalf("ProxyStream error: %v", err)
+	}
+
+	events := parseSSEEvents(t, w.buf.String())
+	if len(events) != 7 {
+		t.Fatalf("expected 7 events, got %d: %+v", len(events), events)
+	}
+	if events[1].Type != "content_block_start" || events[1].ContentBlock == nil || events[1].ContentBlock.Type != "tool_use" {
+		t.Fatalf("event[1] = %+v, want content_block_start(tool_use)", events[1])
+	}
+	if got, want := events[1].ContentBlock.ID, "call_123"; got != want {
+		t.Fatalf("tool id = %q, want %q", got, want)
+	}
+	if got, want := events[1].ContentBlock.Name, "read_file"; got != want {
+		t.Fatalf("tool name = %q, want %q", got, want)
+	}
+	for _, eventIndex := range []int{2, 3} {
+		if events[eventIndex].Type != "content_block_delta" || events[eventIndex].Delta == nil || events[eventIndex].Delta.Type != "input_json_delta" {
+			t.Fatalf("event[%d] = %+v, want input_json_delta", eventIndex, events[eventIndex])
+		}
+		if got, want := *events[eventIndex].Index, 0; got != want {
+			t.Fatalf("event[%d] index = %d, want %d", eventIndex, got, want)
+		}
+	}
+	if got, want := events[2].Delta.PartialJSON, `{"path"`; got != want {
+		t.Fatalf("first partial_json = %q, want %q", got, want)
+	}
+	if got, want := events[3].Delta.PartialJSON, `:"README.md"}`; got != want {
+		t.Fatalf("second partial_json = %q, want %q", got, want)
+	}
+	if events[4].Type != "content_block_stop" || events[4].Index == nil || *events[4].Index != 0 {
+		t.Fatalf("event[4] = %+v, want content_block_stop index 0", events[4])
+	}
+	if events[5].Type != "message_delta" || events[5].Delta == nil || events[5].Delta.StopReason != "tool_use" {
+		t.Fatalf("event[5] = %+v, want message_delta stop_reason tool_use", events[5])
+	}
+	if events[6].Type != "message_stop" {
+		t.Fatalf("event[6] = %+v, want message_stop", events[6])
 	}
 }
 
