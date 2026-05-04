@@ -75,8 +75,12 @@ func (h *HealthHandler) HandleCountTokens(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	systemText, err := systemAndToolsTokenText(body.SystemText(), body.Tools)
+	if err != nil {
+		http.Error(w, "failed to process tools", http.StatusBadRequest)
+		return
+	}
 	// Count tokens.
-	systemText := systemAndToolsTokenText(body.SystemText(), body.Tools)
 	messages := tokenMessagesFromAnthropic(body.Messages)
 	count, err := h.tokenCounter.CountMessages(systemText, messages)
 	if err != nil {
